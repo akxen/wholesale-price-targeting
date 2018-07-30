@@ -1,3 +1,4 @@
+man/*
 src/1_compile_data/output/*
 src/2_parameter_selector/output/*
 src/3_process_results/output/*
