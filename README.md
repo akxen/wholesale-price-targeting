@@ -1,4 +1,4 @@
-# Wholesale price targeting via refunded emissions payments
+# Emissions reduction and wholesale electricity price targeting using an output-based mechanism
 This notebook contains code which implements a mathematical program used to calibrate an output-based emissions abatement policy. Specifically, the program determines values for permit prices and the sectoral emissions intensity baseline that yields given environmental and economic objectives. A derivation of the mathematical program is given in `mppdc_derivation.pdf` within the `derviation` folder.
 
 
@@ -7,4 +7,6 @@ Network and generator datasets used in this analysis are obtained from the follo
 
 
 ## Usage notes
-A large number of output files will be generated when running the `parameter_selector.ipynb` notebook. Ensure there is enough space on disk (approximately 10GB) before running.
+A large number of output files will be generated when running the `parameter_selector.ipynb` notebook. Ensure there is enough space on disk (approximately 30GB) before running.
+
+See `environment.yml` for specifications of the conda environment used to run the model.
