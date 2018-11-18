@@ -1,16 +1,14 @@
 *.cmd
+*.bat
 
 man/*
-!man/3_initial_submission/
-man/3_initial_submission/*
-!man/3_initial_submission/latex_files/
-man/3_initial_submission/latex_files/*
-!man/3_initial_submission/latex_files/derivation/
-man/3_initial_submission/latex_files/derivation/*
-!man/3_initial_submission/latex_files/derivation/mppdc_derivation.pdf
-
-src/1_compile_data/output/*
-!src/1_compile_data/output/README.md
+!man/Applied_Energy/
+man/Applied_Energy/*
+!man/Applied_Energy/3_revised_submission_1/
+man/Applied_Energy/3_revised_submission_1/*
+!man/Applied_Energy/3_revised_submission_1/derivation/
+man/Applied_Energy/3_revised_submission_1/derivation/*
+!man/Applied_Energy/3_revised_submission_1/derivation/mppdc_derivation.pdf
 
 src/2_parameter_selector/output/*
 !src/2_parameter_selector/output/README.md
@@ -18,7 +16,7 @@ src/2_parameter_selector/output/*
 src/3_process_results/output/*
 !src/3_process_results/output/README.md
 
-src/4_plotting/output/*
-!src/4_plotting/output/figures/
-src/4_plotting/output/figures/*
-!src/4_plotting/output/figures/README.md
+src/4_plotting/output/48_scenarios/*
+!src/4_plotting/output/figures/48_scenarios/README.md
+src/4_plotting/output/100_scenarios/*
+!src/4_plotting/output/figures/100_scenarios/README.md
