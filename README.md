@@ -3,7 +3,7 @@ This notebook contains code which implements a mathematical program used to cali
 
 
 ## Zenodo link
-Network and generator datasets used in this analysis are obtained from the following repository: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1218806.svg)](https://doi.org/10.5281/zenodo.1218805)
+Network and generator datasets used in this analysis are obtained from the following repository: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1326942.svg)](https://doi.org/10.5281/zenodo.1326942)
 
 
 ## Usage notes
