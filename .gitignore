@@ -1,5 +1,7 @@
 *.cmd
 *.bat
+*.log
+*.lp
 
 man/*
 !man/Applied_Energy/

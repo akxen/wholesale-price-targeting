@@ -10,13 +10,8 @@
 # 
 # Steps taken to conduct the analysis:
 # 1. Import packages and declare declare paths to files
-# 2. Load data:
-#  * generator data;
-#  * network edges;
-#  * network HVDC interconnector data;
-#  * network AC interconnector data;
-#  * network nodes;
-#  * NEM demand and dispatch data for 2017.
+# 2. Load data
+# 3. Organise data
 # 6. Construct model used to select EIS parameters. The model consists of three blocks of equations:
 #  * Primal block - contains constraints related to a standard DCOPF model;
 #  * Dual block - dual constraints associated with a standard DCOPF model;
@@ -40,8 +35,6 @@ import numpy as np
 import pandas as pd
 import datetime as dt
 
-import ipyparallel as ipp
-
 from pyomo.environ import *
 
 import matplotlib.pyplot as plt
@@ -55,199 +48,283 @@ np.random.seed(seed=10)
 # In[2]:
 
 
-# Core data directory
-data_dir = os.path.abspath(os.path.join(os.path.curdir, os.path.pardir, os.path.pardir, 'data'))
+class DirectoryPaths(object):
+    "Paths to relevant directories"
+    
+    def __init__(self):
+        self.data_dir = os.path.join(os.path.curdir, os.path.pardir, os.path.pardir, 'data')
+        self.scenarios_dir = os.path.join(os.path.curdir, os.path.pardir, '1_create_scenarios')
+        self.output_dir = os.path.join(os.path.curdir, 'output', '48_scenarios')
 
-# Compiled model data directory
-model_data_dir = os.path.abspath(os.path.join(os.path.curdir, os.path.pardir, '1_compile_data'))
-
-# Output directory
-output_dir = os.path.abspath(os.path.join(os.path.curdir, 'output'))
+paths = DirectoryPaths()
 
 
 # ## Model data
+# ### Input data
 
 # In[3]:
 
 
-# Load dictionary created by 'compile_data.ipynb'
-with open(os.path.join(model_data_dir, 'output', 'model_data.pickle'), 'rb') as f:
-    model_data = pickle.load(f)
+class RawData(object):
+    "Collect input data"
+    
+    def __init__(self):
+        
+        # Paths to directories
+        DirectoryPaths.__init__(self)
+        
+        
+        # Network data
+        # ------------
+        # Nodes
+        self.df_n = pd.read_csv(os.path.join(self.data_dir, 'network_nodes.csv'), index_col='NODE_ID')
 
-# Generator information
-df_g = model_data['df_g']
+        # AC edges
+        self.df_e = pd.read_csv(os.path.join(self.data_dir, 'network_edges.csv'), index_col='LINE_ID')
 
-# Admittance matrix
-df_Y = model_data['df_Y']
+        # HVDC links
+        self.df_hvdc_links = pd.read_csv(os.path.join(self.data_dir, 'network_hvdc_links.csv'), index_col='HVDC_LINK_ID')
 
-# Node data summary
-df_m = model_data['df_m']
+        # AC interconnector links
+        self.df_ac_i_links = pd.read_csv(os.path.join(self.data_dir, 'network_ac_interconnector_links.csv'), index_col='INTERCONNECTOR_ID')
 
-# HVDC incidence matrix
-df_hvdc_c = model_data['df_hvdc_c']
-
-# Dictionary mapping network zones to node IDs
-zones = model_data['zones']
-
-# AC interconnector connection points
-df_ac_i = model_data['df_ac_i']
-
-# AC interconnector flow limits
-df_ac_i_lim = model_data['df_ac_i_lim']
-
-# HVDC link connection points and flow limits
-df_hvdc = model_data['df_hvdc']
-
-# Demand time series for each NEM region
-df_regd = model_data['df_regd']
-
-# Time series for power injections from intermittent sources at each node (e.g. wind and solar)
-df_inter = model_data['df_inter']
-
-# DUID dispatch signals for 2017 (from MMSDM database)
-df_dis = model_data['df_dis']
-
-# Fixed power injections from hydro plant at each node
-df_fx_hydro = model_data['df_fx_hydro']
+        # AC interconnector flow limits
+        self.df_ac_i_limits = pd.read_csv(os.path.join(self.data_dir, 'network_ac_interconnector_flow_limits.csv'), index_col='INTERCONNECTOR_ID')
 
 
-# Perturb generator SRMCs by a random number uniformly distributed between 0 and 1. Unique SRMCs assist the LP to find a unique solution.
+        # Generators
+        # ----------       
+        # Generating unit information
+        self.df_g = pd.read_csv(os.path.join(self.data_dir, 'generators.csv'), index_col='DUID', dtype={'NODE': int})
+        self.df_g['SRMC_2016-17'] = self.df_g['SRMC_2016-17'].map(lambda x: x + np.random.uniform(0, 2))
+        
+               
+        # Operating scenarios
+        # -------------------
+        with open(os.path.join(paths.scenarios_dir, 'output', '48_scenarios.pickle'), 'rb') as f:
+            self.df_scenarios = pickle.load(f)
+
+# Create object containing raw model data
+raw_data = RawData() 
+
+
+# ### Organise data for model
 
 # In[4]:
 
 
-df_g['SRMC_2016-17'] = df_g['SRMC_2016-17'].map(lambda x: x + np.random.uniform(0, 1))
-df_g['SRMC_2016-17'].head()
+class OrganiseData(object):
+    "Organise data to be used in mathematical program"
+    
+    def __init__(self):
+        # Load model data
+        RawData.__init__(self)
+        
+        def reindex_nodes(self):
+            # Original node indices
+            df_index_map = self.df_n.index.to_frame().rename(columns={'NODE_ID': 'original'}).reset_index().drop('NODE_ID',axis=1)
+
+            # New node indices
+            df_index_map['new'] = df_index_map.apply(lambda x: x.name + 1, axis=1)
+
+            # Create dictionary mapping original node indices to new node indices
+            index_map = df_index_map.set_index('original')['new'].to_dict()
 
 
-# Save the adjusted generator information dataframe containing updated costs.
+            # Network nodes
+            # -------------
+            # Construct new index and assign to dataframe
+            new_index = pd.Index(self.df_n.apply(lambda x: index_map[x.name], axis=1), name=self.df_n.index.name)
+            self.df_n.index = new_index
+
+
+            # Network edges
+            # -------------
+            # Reindex 'from' and 'to' nodes in network edges dataframe
+            def _reindex_from_and_to_nodes(row, order=False):
+                """Re-index 'from' and 'to' nodes. If required, change node order such that 'from' node index < 'to' node index"""
+
+                # Original 'from' and 'to' nodes
+                n_1 = index_map[row['FROM_NODE']]
+                n_2 = index_map[row['TO_NODE']]
+
+                if order:
+                    # If original 'from' node index is less than original 'to' node index keep same order, else reverse order
+                    if n_1 < n_2:
+                        f, t = n_1, n_2
+                    else:
+                        f, t = n_2, n_1
+                    return pd.Series({'FROM_NODE': f, 'TO_NODE': t})
+                else:
+                    return pd.Series({'FROM_NODE': n_1, 'TO_NODE': n_2})
+            self.df_e[['FROM_NODE', 'TO_NODE']] = self.df_e.apply(_reindex_from_and_to_nodes, args=(True,), axis=1)
+
+            # Sort lines by 'from' and 'to' node indices
+            self.df_e.sort_values(by=['FROM_NODE', 'TO_NODE'], inplace=True)
+
+
+            # Generators
+            # ----------
+            self.df_g['NODE'] = self.df_g['NODE'].map(lambda x: df_index_map.set_index('original')['new'].loc[x])
+
+
+            # Network HVDC links
+            # ------------------
+            self.df_hvdc_links[['FROM_NODE', 'TO_NODE']] = self.df_hvdc_links.apply(_reindex_from_and_to_nodes, axis=1)
+
+
+            # Network interconnectors
+            # -----------------------
+            self.df_ac_i_links[['FROM_NODE', 'TO_NODE']] = self.df_ac_i_links.apply(_reindex_from_and_to_nodes, axis=1)
+            
+            # Operating scenarios
+            # -------------------
+            df_temp = self.df_scenarios.reset_index()
+            df_temp['NODE_ID'] = df_temp.apply(lambda x: index_map[x['NODE_ID']] if type(x['NODE_ID']) == int else x['NODE_ID'], axis=1)
+            self.df_scenarios = df_temp.set_index(['level', 'NODE_ID']).T     
+            
+        reindex_nodes(self)    
+            
+    def get_admittance_matrix(self):
+        "Construct admittance matrix for network"
+
+        # Initialise dataframe
+        df_Y = pd.DataFrame(data=0j, index=self.df_n.index, columns=self.df_n.index)
+
+        # Off-diagonal elements
+        for index, row in self.df_e.iterrows():
+            fn, tn = row['FROM_NODE'], row['TO_NODE']
+            df_Y.loc[fn, tn] += - (1 / (row['R_PU'] + 1j * row['X_PU'])) * row['NUM_LINES']
+            df_Y.loc[tn, fn] += - (1 / (row['R_PU'] + 1j * row['X_PU'])) * row['NUM_LINES']
+
+        # Diagonal elements
+        for i in self.df_n.index:
+            df_Y.loc[i, i] = - df_Y.loc[i, :].sum()
+
+        # Add shunt susceptance to diagonal elements
+        for index, row in self.df_e.iterrows():
+            fn, tn = row['FROM_NODE'], row['TO_NODE']
+            df_Y.loc[fn, fn] += (row['B_PU'] / 2) * row['NUM_LINES']
+            df_Y.loc[tn, tn] += (row['B_PU'] / 2) * row['NUM_LINES']
+
+        return df_Y
+    
+    def get_HVDC_incidence_matrix(self):
+        "Incidence matrix for HVDC links"
+        
+        # Incidence matrix for HVDC links
+        df = pd.DataFrame(index=self.df_n.index, columns=self.df_hvdc_links.index, data=0)
+
+        for index, row in self.df_hvdc_links.iterrows():
+            # From nodes assigned a value of 1
+            df.loc[row['FROM_NODE'], index] = 1
+
+            # To nodes assigned a value of -1
+            df.loc[row['TO_NODE'], index] = -1
+        
+        return df
+    
+    def get_reference_nodes(self):
+        "Get reference node IDs"
+        
+        # Filter Regional Reference Nodes (RRNs) in Tasmania and Victoria.
+        mask = (model_data.df_n['RRN'] == 1) & (model_data.df_n['NEM_REGION'].isin(['TAS1', 'VIC1']))
+        reference_node_ids = model_data.df_n[mask].index
+        
+        return reference_node_ids
+    
+    def get_generator_node_map(self, generators):
+        "Get set of generators connected to each node"
+        generator_node_map = (self.df_g.reindex(index=generators)
+                              .reset_index()
+                              .rename(columns={'OMEGA_G': 'DUID'})
+                              .groupby('NODE').agg(lambda x: set(x))['DUID']
+                              .reindex(self.df_n.index, fill_value=set()))
+        
+        return generator_node_map
+
+# Create object containing organised model data
+model_data = OrganiseData()
+
+
+# Perturb generator SRMCs by a random number uniformly distributed between 0 and 1. Unique SRMCs assist the solver to find a unique solution.
 
 # In[5]:
 
 
-with open(os.path.join(output_dir, 'df_g.pickle'), 'wb') as f:
-    pickle.dump(df_g, f)
+model_data.df_g['SRMC_2016-17'] = model_data.df_g['SRMC_2016-17'].map(lambda x: x + np.random.uniform(0, 1))
+model_data.df_g['SRMC_2016-17'].head()
 
 
-# ### Setup parallel processing
+# Save generator, node, and scenario information so they can be used in later processing and plotting steps.
 
 # In[6]:
 
 
-# # Profile for cluster
-# client_path = 'C:/Users/eee/AppData/Roaming/SPB_Data/.ipython/profile_parallel/security/ipcontroller-client.json'
-# c = ipp.Client(client_path)
-# v = c[:]
+with open(os.path.join(paths.output_dir, 'df_g.pickle'), 'wb') as f:
+    pickle.dump(model_data.df_g, f)
+    
+with open(os.path.join(paths.output_dir, 'df_n.pickle'), 'wb') as f:
+    pickle.dump(model_data.df_n, f)
+    
+with open(os.path.join(paths.output_dir, 'df_scenarios.pickle'), 'wb') as f:
+    pickle.dump(model_data.df_scenarios, f)
 
 
 # ## Model
-# 
-# ### Time horizon
-# Construct list of dates over which the model should be run.
+# Wrap optimisation model in function. Pass parameters to solve for different scenarios.
 
 # In[7]:
 
 
-def get_ordinal_list(start_date, end_date):
-    """Given start and end dates (as strings) give list of ordinal dates between those days"""
-
-    # Start date (ordinal format)
-    ss_ord = dt.datetime.toordinal(dt.datetime.strptime(start_date, '%Y-%m-%d'))
-
-    # End date (ordinal format)
-    es_ord = dt.datetime.toordinal(dt.datetime.strptime(end_date, '%Y-%m-%d'))
-
-    # List of ordinal dates between the start and end dates
-    ordinal_list = [i for i in range(ss_ord, es_ord + 1)]
-    return ordinal_list
-
-def get_load_profile_dates(selected_seasons):
-    """Choose random days in each season and construct load profile
+def run_model(model_type=None, mode=None, tau_list=None, phi_list=None, E_list=None, R_list=None, target_bau_average_price_multiple_list=None, bau_average_price=None, fix_phi=None, fix_tau=None, stream_solver=False):
+    """Construct and run model used to calibrate REP scheme parameters
     
     Parameters
     ----------
-    selected_seasons : list
-        List of seasons for which a random day should be selected. 
-        Choose from ['summer', 'autumn', 'winter', 'spring']
+    model_type : str
+        Either DCOPF or MPPDC
     
-    Returns
-    -------
-    load_profile : pandas datetime index
-        Index consisting of hourly timestamps for the randomly selected
-        days in each season specified.    
-    """
+    mode : str
+        Mode in which to run model. E.g. compute baseline given fixed permit price and price target
     
-    # Season start and end dates
-    seasons = dict()
-    seasons['spring'] = {'start': '2017-09-01', 'end': '2017-11-30'}
-    seasons['autumn'] = {'start': '2017-03-01', 'end': '2017-08-31'}
-    seasons['winter'] = {'start': '2017-06-01', 'end': '2017-08-31'}
-
-    # For each season, get the days (in ordinal format) belonging to that season
-    seasons_ord = {key: get_ordinal_list(seasons[key]['start'], seasons[key]['end']) for key in seasons.keys()}
-
-    # Add summer by subtracting the set of days from March - November from all days in the year
-    seasons_ord['summer'] = list(set(get_ordinal_list('2017-01-01', '2017-12-31')) - set(get_ordinal_list('2017-03-01', '2017-11-30')))
-
-    # Container for date time indices for days selected in each season.
-    dt_indices = []
-
-    for s in selected_seasons:
-        if s not in seasons_ord.keys():
-            raise(Exception('Can only choose from {0}'.format(seasons.keys())))
-            
-        # Selected day
-        ps = dt.datetime.fromordinal(np.random.choice(seasons_ord[s])) + dt.timedelta(hours=1)
+    tau_list : list
+        Fixed permit prices for which the model should be run [$/tCO2]
+    
+    phi_list : list
+        Fixed emissions intensity baselines for which the model should be run [tCO2/MWh]
+    
+    E_list : list
+        Average emissions intensity constraints [tCO2/MWh]
         
-        # Time indices over the course of that day (hourly resolution)
-        dt_indices.append(pd.date_range(ps, periods=24, freq='1H'))
+    R_list : list
+        Minimum scheme revenue constraint [$]
         
-    # Load profile obtained by combining multiple days 
-    load_profile = dt_indices[0].union_many(dt_indices[1:])
-    return load_profile
-
-load_profile_dates = get_load_profile_dates(['summer', 'winter'])
-load_profile_dates    
-
-
-# ### Mathematical program
-# Wrap optimisation model in function. Allows possibility for parallel processing using ipyparrallel.
-
-# In[8]:
-
-
-def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_list=None, phi_list=None, E_list=None, R_list=None, target_price_list=None, fix_phi=None, fix_tau=None, stream_solver=False, **model_data):
-
-    # Import packages locally within function to allow possibility of parallel model runs
-    import time
-    from math import pi
-
-    import numpy as np    
-    from pyomo.environ import ConcreteModel, Set, Param, NonNegativeReals, Var, Constraint, Objective, minimize, Suffix, SolverFactory
-
-    # Record start time for simulation run
-    t0 = time.time()
+    target_bau_average_price_multiple_list : list
+        Wholesale electricity price target as multiple of the business-as-usual (BAU) price [$/MWh]
+        
+    bau_average_price : float
+        Business-as-usual average wholesale electricity price [$/MWh]
+        
+    fix_phi : float
+        Fixed value of emissions intensity baseline (only applies to DCOPF model)
+    
+    fix_tau : float
+        Fixed value of permit price (only applies to DCOPF model)
+        
+    stream_solver : bool
+        Indicator if solver output should be streamed to terminal    
+    """  
 
     # Checking model options are correctly inputted
     # ---------------------------------------------
-    if model_type not in ['dcopf', 'mppdc']:
-        raise(Exception("Must specify either 'dcopf' or 'mppdc' as the model type"))
+    if model_type not in ['DCOPF', 'MPPDC']:
+        raise(Exception("Must specify either 'DCOPF' or 'MPPDC' as the model type"))
     
-    if model_type is 'mppdc' and mode not in ['calc_phi_tau', 'calc_phi', 'calc_fixed']:
-        raise(Exception("If model_type 'mppdc' specified, must choose from 'calc_phi_tau', 'calc_phi', 'calc_fixed'"))
+    if model_type is 'MPPDC' and mode not in ['find_price_targeting_baseline', 'fixed_policy_parameters', 'find_permit_price_and_baseline']:
+        raise(Exception("If model_type 'MPPDC' specified, must choose from 'find_price_targeting_baseline', 'fixed_policy_parameters', 'find_permit_price_and_baseline'"))
 
-    # Data
-    df_m = model_data['df_m']
-    df_g = model_data['df_g']
-    df_Y = model_data['df_Y']
-    df_hvdc_c = model_data['df_hvdc_c']
-    df_ac_i = model_data['df_ac_i']
-    df_ac_i_lim = model_data['df_ac_i_lim']
-    df_regd = model_data['df_regd']
-    df_inter = model_data['df_inter']
-    df_fx_hydro = model_data['df_fx_hydro']
-
-
+        
     # Initialise model object
     # -----------------------
     model = ConcreteModel(name='DCOPF')
@@ -258,54 +335,48 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
     solver = 'cplex'
     solver_io = 'lp'
     keepfiles = False
-    #solver_opt = {'BarHomogeneous': 1, 'FeasibilityTol': 1e-4, 'BarConvTol': 1e-4, 'ScaleFlag': 2, 'NumericFocus': 3}
     solver_opt = {}
-    model.dual = Suffix(direction=Suffix.IMPORT)
     opt = SolverFactory(solver, solver_io=solver_io)
 
 
     # Sets
     # ----
-    # Trading intervals
-    if model_type is 'dcopf': model.T = Set(initialize=['DUMMY'])
-    if model_type is 'mppdc': model.T = Set(initialize=RangeSet(len(date_range_list[0])))
+    # Operating scenarios
+    if model_type is 'DCOPF': model.T = Set(initialize=['DUMMY'])
+    if model_type is 'MPPDC': model.T = Set(initialize=model_data.df_scenarios.index)
 
     # Nodes
-    model.I = Set(initialize=df_Y.columns)   
+    model.I = Set(initialize=model_data.df_n.index)   
 
     # Network reference nodes (Mainland and Tasmania)
-    model.N = Set(initialize=list(zones.values()))
+    reference_nodes = model_data.get_reference_nodes()
+    model.N = Set(initialize=reference_nodes)
 
     # AC network edges
+    df_Y = model_data.get_admittance_matrix()
     ac_edges = [(df_Y.columns[i], df_Y.columns[j]) for i, j in zip(np.where(df_Y != 0)[0], np.where(df_Y != 0)[1]) if (i < j)]
     model.K = Set(initialize=ac_edges)
 
     # HVDC links
-    model.M = Set(initialize=df_hvdc_c.index)
+    hvdc_incidence_matrix = model_data.get_HVDC_incidence_matrix().T
+    model.M = Set(initialize=hvdc_incidence_matrix.index)
 
-    # Generators
-    if fix_hydro:
-        mask = (df_g['SCHEDULE_TYPE'] == 'SCHEDULED') & ~(df_g['FUEL_CAT'] == 'Hydro')
-        model.G = Set(initialize=df_g[mask].index)
-    else:
-        mask = (df_g['SCHEDULE_TYPE'] == 'SCHEDULED')
-        model.G = Set(initialize=df_g[mask].index)
+    # Generators - only non-hydro dispatchable plant
+    mask = (model_data.df_g['SCHEDULE_TYPE'] == 'SCHEDULED') & ~(model_data.df_g['FUEL_CAT'] == 'Hydro')
+    model.G = Set(initialize=model_data.df_g[mask].index)
 
 
-    # Parmaters
-    # ---------
-    # Trading interval length [h]
-    model.L = Param(initialize=1)
-
+    # Parameters
+    # ----------
     # Generation lower bound [MW]
-    def P_MIN_rule(model, g):
+    def P_MIN_RULE(model, g):
         return 0
-    model.P_MIN = Param(model.G, initialize=P_MIN_rule)
+    model.P_MIN = Param(model.G, initialize=P_MIN_RULE)
 
     # Generation upper bound [MW]
-    def P_MAX_rule(model, g):
-        return float(df_g.loc[g, 'REG_CAP'])
-    model.P_MAX = Param(model.G, initialize=P_MAX_rule)
+    def P_MAX_RULE(model, g):
+        return float(model_data.df_g.loc[g, 'REG_CAP'])
+    model.P_MAX = Param(model.G, initialize=P_MAX_RULE)
 
     # Voltage angle difference between connected nodes i and j lower bound [rad]
     model.VANG_MIN = Param(initialize=float(-pi / 2))
@@ -314,64 +385,67 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
     model.VANG_MAX = Param(initialize=float(pi / 2))
 
     # Susceptance matrix [pu]
-    def B_rule(model, i, j):
+    def B_RULE(model, i, j):
         return float(np.imag(df_Y.loc[i, j]))
-    model.B = Param(model.I, model.I, initialize=B_rule)
+    model.B = Param(model.I, model.I, initialize=B_RULE)
 
     # HVDC incidence matrix
-    def C_rule(model, m, i):
-        return float(df_hvdc_c.loc[m, i])
-    model.C = Param(model.M, model.I, initialize=C_rule)
+    def C_RULE(model, m, i):
+        return float(hvdc_incidence_matrix.loc[m, i])
+    model.C = Param(model.M, model.I, initialize=C_RULE)
 
     # HVDC reverse flow from node i to j lower bound [MW]
-    def H_MIN_rule(model, m):
-        return - float(df_hvdc.loc[m, 'REVERSE_LIMIT_MW'])
-    model.H_MIN = Param(model.M, initialize=H_MIN_rule)
+    def H_MIN_RULE(model, m):
+        return - float(model_data.df_hvdc_links.loc[m, 'REVERSE_LIMIT_MW'])
+    model.H_MIN = Param(model.M, initialize=H_MIN_RULE)
 
     # HVDC forward flow from node i to j upper bound [MW]
-    def H_MAX_rule(model, m):
-        return float(df_hvdc.loc[m, 'FORWARD_LIMIT_MW'])
-    model.H_MAX = Param(model.M, initialize=H_MAX_rule)
+    def H_MAX_RULE(model, m):
+        return float(model_data.df_hvdc_links.loc[m, 'FORWARD_LIMIT_MW'])
+    model.H_MAX = Param(model.M, initialize=H_MAX_RULE)
 
     # AC power flow limits on branches
-    def F_MAX_rule(model, i, j):
-        return 99999
-    model.F_MAX = Param(model.K, initialize=F_MAX_rule, mutable=True)
-
-    def F_MIN_rule(model, i, j):
+    def F_MIN_RULE(model, i, j):
         return -99999
-    model.F_MIN = Param(model.K, initialize=F_MIN_rule, mutable=True)
+    model.F_MIN = Param(model.K, initialize=F_MIN_RULE, mutable=True)
+    
+    def F_MAX_RULE(model, i, j):
+        return 99999
+    model.F_MAX = Param(model.K, initialize=F_MAX_RULE, mutable=True)
 
     # Adjust power flow limits for major AC interconnectors
-    for index, row in df_ac_i.drop('VIC1-NSW1').iterrows():
+    for index, row in model_data.df_ac_i_links.drop('VIC1-NSW1').iterrows():
         i, j = row['FROM_NODE'], row['TO_NODE']
 
-        # Must take into account direction of branch flow
+        # Take into account direction of branch flow
         if i < j:
-            model.F_MAX[i, j] = df_ac_i_lim.loc[index, 'FORWARD_LIMIT_MW']
-            model.F_MIN[i, j] = - df_ac_i_lim.loc[index, 'REVERSE_LIMIT_MW']
+            model.F_MAX[i, j] = model_data.df_ac_i_limits.loc[index, 'FORWARD_LIMIT_MW']
+            model.F_MIN[i, j] = - model_data.df_ac_i_limits.loc[index, 'REVERSE_LIMIT_MW']
         else:
-            model.F_MAX[j, i] = df_ac_i_lim.loc[index, 'REVERSE_LIMIT_MW']
-            model.F_MIN[j, i] = - df_ac_i_lim.loc[index, 'FORWARD_LIMIT_MW']
+            model.F_MAX[j, i] = model_data.df_ac_i_limits.loc[index, 'REVERSE_LIMIT_MW']
+            model.F_MIN[j, i] = - model_data.df_ac_i_limits.loc[index, 'FORWARD_LIMIT_MW']
 
     # Generator emissions intensities [tCO2/MWh]
-    def E_rule(model, g):
-        return float(df_g.loc[g, 'EMISSIONS'])
-    model.E = Param(model.G, initialize=E_rule)
+    def E_RULE(model, g):
+        return float(model_data.df_g.loc[g, 'EMISSIONS'])
+    model.E = Param(model.G, initialize=E_RULE)
 
-    # Generator short run marginal cost [$/MWh]
-    def A_rule(model, g):
-        return float(df_g.loc[g, 'SRMC_2016-17'])
-    model.A = Param(model.G, initialize=A_rule)
+    # Generator short run marginal costs [$/MWh]
+    def A_RULE(model, g):
+        return float(model_data.df_g.loc[g, 'SRMC_2016-17'])
+    model.A = Param(model.G, initialize=A_RULE)
 
-    # System base [MVA]
+    # System base power [MVA]
     model.S = Param(initialize=100)
     
-    # Revenue constraint [$]
-    model.R = Param(initialize=0, mutable=True)
+    # Revenue constraint [$] - Initialise to very large negative value (loose constraint)
+    model.R = Param(initialize=-9e9, mutable=True)
     
     # Target wholsale electricity price [$/MWh]
-    model.target_price = Param(initialize=30, mutable=True)
+    model.TARGET_PRICE = Param(initialize=30, mutable=True)
+       
+    # Target REP scheme revenue
+    model.MIN_SCHEME_REVENUE = Param(initialize=-float(5e9), mutable=True)
 
 
     # Upper-level program
@@ -389,7 +463,7 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
     # -------------------
     # Primal block (indexed over T) (model.LL_PRIM)
     # ---------------------------------------------
-    def LL_PRIM_rule(b, t):
+    def LL_PRIM_RULE(b, t):
         # Parameters
         # ----------
         # Demand at each node (to be set prior to running model)
@@ -398,7 +472,13 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
         # Intermittent power injection at each node (to be set prior to running model)
         b.P_R = Param(model.I, initialize=0, mutable=True)
 
-
+        # Trading interval length [h] - use 1hr if running DCOPF model
+        if t == 'DUMMY':
+            b.L = 1
+        else:
+            b.L = Param(initialize=float(model_data.df_scenarios.loc[t, ('hours', 'duration')]))
+    
+    
         # Variables
         # ---------
         b.P = Var(model.G)
@@ -408,27 +488,36 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
 
         # Constraints
         # -----------
-        def P_lb_rule(b, g):
+        # Power output lower bound
+        def P_LB_RULE(b, g):
             return model.P_MIN[g] - b.P[g] <= 0
-        b.P_lb = Constraint(model.G, rule=P_lb_rule)
+        b.P_LB = Constraint(model.G, rule=P_LB_RULE)
 
-        def P_ub_rule(b, g):
+        # Power output upper bound
+        def P_UB_RULE(b, g):
             return b.P[g] - model.P_MAX[g] <= 0
-        b.P_ub = Constraint(model.G, rule=P_ub_rule)
+        b.P_UB = Constraint(model.G, rule=P_UB_RULE)
 
-        def vang_diff_lb_rule(b, i, j):
+        # Voltage angle difference between connected nodes lower bound
+        def VANG_DIFF_LB_RULE(b, i, j):
             return model.VANG_MIN - b.vang[i] + b.vang[j] <= 0
-        b.vang_diff_lb = Constraint(model.K, rule=vang_diff_lb_rule)
+        b.VANG_DIFF_LB = Constraint(model.K, rule=VANG_DIFF_LB_RULE)
 
-        def vang_diff_ub_rule(b, i, j):
+        # Voltage angle difference between connected nodes upper bound
+        def VANG_DIFF_UB_RULE(b, i, j):
             return b.vang[i] - b.vang[j] - model.VANG_MAX <= 0
-        b.vang_diff_ub = Constraint(model.K, rule=vang_diff_ub_rule)
+        b.VANG_DIFF_UB = Constraint(model.K, rule=VANG_DIFF_UB_RULE)
 
-        def vang_ref_rule(b, n):
+        # Fix voltage angle = 0 for reference nodes
+        def VANG_REF_RULE(b, n):
             return b.vang[n] == 0
-        b.vang_ref = Constraint(model.N, rule=vang_ref_rule)
+        b.VANG_REF = Constraint(model.N, rule=VANG_REF_RULE)
 
-        def power_balance_rule(b, i):
+        # Map between nodes and generators connected to each node
+        generator_node_map = model_data.get_generator_node_map([g for g in model.G])
+        
+        # Nodal power balance constraint
+        def POWER_BALANCE_RULE(b, i):
             # Branches connected to node i
             K_i = [k for k in model.K if i in k]
 
@@ -438,30 +527,34 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
             return (-model.S * sum(model.B[i, j] * (b.vang[i] - b.vang[j]) for j in I_i)
                    - sum(model.C[m, i] * b.H[m] for m in model.M)
                    - b.P_D[i]
-                   + sum(b.P[g] for g in df_m.loc[i, 'DUID'] if g in model.G)
+                   + sum(b.P[g] for g in generator_node_map.loc[i] if g in model.G)
                    + b.P_R[i] == 0)
-        b.power_balance = Constraint(model.I, rule=power_balance_rule)
+        b.POWER_BALANCE = Constraint(model.I, rule=POWER_BALANCE_RULE)
 
-        def ac_flow_lb_rule(b, i, j):
+        # AC branch flow limits upper bound
+        def AC_FLOW_LB_RULE(b, i, j):
             return model.F_MIN[i, j] - model.S * model.B[i, j] * (b.vang[i] - b.vang[j]) <= 0
-        b.ac_flow_lb = Constraint(model.K, rule=ac_flow_lb_rule)
+        b.AC_FLOW_LB = Constraint(model.K, rule=AC_FLOW_LB_RULE)
 
-        def ac_flow_ub_rule(b, i, j):
+        # AC branch flow limits lower bound
+        def AC_FLOW_UB_RULE(b, i, j):
             return model.S * model.B[i, j] * (b.vang[i] - b.vang[j]) - model.F_MAX[i, j] <= 0
-        b.ac_flow_ub = Constraint(model.K, rule=ac_flow_ub_rule)
+        b.AC_FLOW_UB = Constraint(model.K, rule=AC_FLOW_UB_RULE)
 
-        def hvdc_flow_lb_rule(b, m):
+        # HVDC branch flow limits lower bound
+        def HVDC_FLOW_LB_RULE(b, m):
             return model.H_MIN[m] - b.H[m] <= 0
-        b.hvdc_flow_lb = Constraint(model.M, rule=hvdc_flow_lb_rule)
+        b.HVDC_FLOW_LB = Constraint(model.M, rule=HVDC_FLOW_LB_RULE)
 
-        def hvdc_flow_ub_rule(b, m):
+        # HVDC branch flow limits upper bound
+        def HVDC_FLOW_UB_RULE(b, m):
             return b.H[m] - model.H_MAX[m] <= 0
-        b.hvdc_flow_ub = Constraint(model.M, rule=hvdc_flow_ub_rule)
+        b.HVDC_FLOW_UB = Constraint(model.M, rule=HVDC_FLOW_UB_RULE)
 
 
     # Dual block (indexed over T) (model.LL_DUAL)
     # -------------------------------------------
-    def LL_DUAL_rule(b, t):
+    def LL_DUAL_RULE(b, t):
         # Variables
         # ---------
         b.alpha = Var(model.G, within=NonNegativeReals)
@@ -478,18 +571,18 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
 
         # Constraints
         # -----------
-        def dual_cons_1_rule(b, g):
+        def DUAL_CONS_1_RULE(b, g):
             # Node at which generator g is located
-            f_g = df_g.loc[g, 'NODE']
+            f_g = model_data.df_g.loc[g, 'NODE']
 
             # Don't apply scheme to existing hydro plant
-            if df_g.loc[g, 'FUEL_CAT'] == 'Hydro':
+            if model_data.df_g.loc[g, 'FUEL_CAT'] == 'Hydro':
                 return model.A[g] - b.alpha[g] + b.beta[g] - b.lambda_var[f_g] == 0
             else:
                 return model.A[g] + ((model.E[g] - model.phi) * model.tau) - b.alpha[g] + b.beta[g] - b.lambda_var[f_g] == 0
-        b.dual_cons_1 = Constraint(model.G, rule=dual_cons_1_rule)
+        b.DUAL_CONS_1 = Constraint(model.G, rule=DUAL_CONS_1_RULE)
 
-        def dual_cons_2_rule(b, i):
+        def DUAL_CONS_2_RULE(b, i):
             # Branches connected to node i
             K_i = [k for k in model.K if i in k]
 
@@ -499,17 +592,17 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
             return (sum( (b.gamma[k] - b.delta[k] + (model.B[k] * model.S * (b.kappa[k] - b.eta[k])) ) * (np.sign(i - k[0]) + np.sign(i - k[1])) for k in K_i)
                     + sum(model.S * ((b.lambda_var[i] * model.B[i, j]) - (b.lambda_var[j] * model.B[j, i])) for j in I_i)
                     + sum(b.zeta[n] for n in model.N if n == i) == 0)
-        b.dual_cons_2 = Constraint(model.I, rule=dual_cons_2_rule)
+        b.DUAL_CONS_2 = Constraint(model.I, rule=DUAL_CONS_2_RULE)
 
-        def dual_cons_4_rule(b, m):
+        def DUAL_CONS_3_RULE(b, m):
             return sum(b.lambda_var[i] * model.C[m, i] for i in model.I) - b.omega[m] + b.psi[m] == 0
-        b.dual_cons_4 = Constraint(model.M, rule=dual_cons_4_rule)
+        b.DUAL_CONS_3 = Constraint(model.M, rule=DUAL_CONS_3_RULE)
 
 
     # Strong duality constraints (indexed over T)
     # -------------------------------------------
-    def SD_CONS_rule(model, t):
-        return (sum(model.LL_PRIM[t].P[g] * ( model.A[g] + (model.E[g] - model.phi) * model.tau ) if df_g.loc[g, 'FUEL_CAT'] == 'Fossil' else model.LL_PRIM[t].P[g] * model.A[g] for g in model.G)
+    def SD_CONS_RULE(model, t):
+        return (sum(model.LL_PRIM[t].P[g] * ( model.A[g] + (model.E[g] - model.phi) * model.tau ) if model_data.df_g.loc[g, 'FUEL_CAT'] == 'Fossil' else model.LL_PRIM[t].P[g] * model.A[g] for g in model.G)
                 == sum(model.LL_PRIM[t].P_D[i] * model.LL_DUAL[t].lambda_var[i] - (model.LL_PRIM[t].P_R[i] * model.LL_DUAL[t].lambda_var[i]) for i in model.I)
                 + sum((model.LL_DUAL[t].omega[m] * model.H_MIN[m]) - (model.LL_DUAL[t].psi[m] * model.H_MAX[m]) for m in model.M)
                 + sum(model.LL_DUAL[t].alpha[g] * model.P_MIN[g] for g in model.G)
@@ -518,35 +611,35 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
 
     # Run DCOPF
     # ---------
-    if model_type is 'dcopf':   
+    if model_type is 'DCOPF':   
+        # Keep dual variables for DCOPF scenario
+        model.dual = Suffix(direction=Suffix.IMPORT)
+        
         # Build model
-        model.LL_PRIM = Block(model.T, rule=LL_PRIM_rule)
+        model.LL_PRIM = Block(model.T, rule=LL_PRIM_RULE)
 
         # Fix phi and tau
         model.phi.fix(fix_phi)
         model.tau.fix(fix_tau)
 
-        # DCOPF objective
+        # DCOPF OBJECTIVE
         # ---------------
-        def dcopf_objective_rule(model):
-            return sum(model.LL_PRIM[t].P[g] * (model.A[g] + ((model.E[g] - model.phi) * model.tau) ) if df_g.loc[g, 'FUEL_CAT'] == 'Fossil' else model.LL_PRIM[t].P[g] * model.A[g] for t in model.T for g in model.G)
-        model.dcopf_objective = Objective(rule=dcopf_objective_rule, sense=minimize)
+        def DCOPF_OBJECTIVE_RULE(model):
+            return sum(model.LL_PRIM[t].P[g] * (model.A[g] + ((model.E[g] - model.phi) * model.tau) ) if model_data.df_g.loc[g, 'FUEL_CAT'] == 'Fossil' else model.LL_PRIM[t].P[g] * model.A[g] for t in model.T for g in model.G)
+        model.DCOPF_OBJECTIVE = Objective(rule=DCOPF_OBJECTIVE_RULE, sense=minimize)
 
-        # Dictionary to store results
-        results = {}
+        # Container to store results
+        results = []
         
         # Solve model for each time period
-        for t in date_range_list:
+        for t in model_data.df_scenarios.index:
             # Update demand and intermittent power injections at each node
             for i in model.I:
                 # Demand
-                model.LL_PRIM['DUMMY'].P_D[i] = float(df_regd.loc[t, df_m.loc[i, 'NEM_REGION']] * df_m.loc[i, 'PROP_REG_D'])
-
-                # Intermittent injections (+ fixed power injections from hydro plant if fix_hydro = True)
-                if fix_hydro:
-                    model.LL_PRIM['DUMMY'].P_R[i] = float(df_inter.loc[t, i]) + float(df_fx_hydro.loc[t, i])
-                else:
-                    model.LL_PRIM['DUMMY'].P_R[i] = float(df_inter.loc[t, i])
+                model.LL_PRIM['DUMMY'].P_D[i] = float(model_data.df_scenarios.loc[t, ('demand', i)])
+                
+                # Intermittent injections fixed power injections from hydro plant
+                model.LL_PRIM['DUMMY'].P_R[i] = float(model_data.df_scenarios.loc[t, ('intermittent', i)] + model_data.df_scenarios.loc[t, ('hydro', i)])
 
             # Solve model
             r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
@@ -554,61 +647,71 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
             
             # Store model output
             model.solutions.store_to(r)
-            results[t] = r
-            results[t]['fix_hydro'] = fix_hydro
-            results[t]['fix_phi'] = fix_phi
-            results[t]['fix_tau'] = fix_tau
             
-            # Store fixed nodal power injections and demand at each node
-            for i in model.I:
-                # Fixed nodal power injections
-                results[t]['Solution'][0]['Variable']['LL_PRIM[DUMMY].P_R[{0}]'.format(i)] = {'Value': model.LL_PRIM['DUMMY'].P_R[i].value}
-                
-                # Demand at each node
-                results[t]['Solution'][0]['Variable']['LL_PRIM[DUMMY].P_D[{0}]'.format(i)] = {'Value': model.LL_PRIM['DUMMY'].P_D[i].value}
+            # Convert to DataFrame
+            try:
+                df_results = pd.DataFrame(r['Solution'][0])
+                df_results['SCENARIO_ID'] = t
+                df_results['FIXED_PHI'] = fix_phi
+                df_results['FIXED_TAU'] = fix_tau
+
+            except:
+                df_results = 'infeasible'
             
-        return results
+            # If model not infeasible store results in list to be concatenated 
+            if type(df_results) != str:
+                results.append(df_results)
+            
+        return pd.concat(results)
+    
 
     # Run MPPDC
     # ---------
-    if model_type is 'mppdc':
+    if model_type is 'MPPDC':
         # Build model
         print('Building primal block')
-        model.LL_PRIM = Block(model.T, rule=LL_PRIM_rule)
+        model.LL_PRIM = Block(model.T, rule=LL_PRIM_RULE)
         print('Building dual block')
-        model.LL_DUAL = Block(model.T, rule=LL_DUAL_rule)
+        model.LL_DUAL = Block(model.T, rule=LL_DUAL_RULE)
         print('Building strong duality constraints')
-        model.SD_CONS = Constraint(model.T, rule=SD_CONS_rule)
+        model.SD_CONS = Constraint(model.T, rule=SD_CONS_RULE)
         print('Finished building blocks')
         
         # Add revenue constraint to model if values of R are specified
-        if R_list:
-            # Exclude existing hydro and renewable from EIS (prevent windfall profits to existing generators)
-            eligible_gens = [g for g in model.G if df_g.loc[g, 'FUEL_CAT'] == 'Fossil']
-            model.R_CONS = Constraint(expr=sum((model.E[g] - model.phi) * model.tau * model.LL_PRIM[t].P[g] * model.L for t in model.T for g in eligible_gens) >= model.R)
+        # Note: Exclude existing hydro and renewables from scheme (prevent windfall profits to existing generators)
+        eligible_gens = [g for g in model.G if model_data.df_g.loc[g, 'FUEL_CAT'] == 'Fossil']
+        model.R_CONS = Constraint(expr=sum((model.E[g] - model.phi) * model.tau * model.LL_PRIM[t].P[g] * model.LL_PRIM[t].L for t in model.T for g in eligible_gens) >= model.R)
 
         # Dummy variables used to minimise difference between average price and target price
         model.x_1 = Var(within=NonNegativeReals)
         model.x_2 = Var(within=NonNegativeReals)
 
-        # Expression for average wholesale price
-        model.avg_price = Expression(expr=(sum(model.LL_DUAL[t].lambda_var[i] * model.L * model.LL_PRIM[t].P_D[i] for t in model.T for i in model.I)
-                                           / sum(model.L * model.LL_PRIM[t].P_D[i] for t in model.T for i in model.I)))
+        # Expressions for total revenue, total demand, and average wholesale price
+        model.TOTAL_REVENUE = Expression(expr=sum(model.LL_DUAL[t].lambda_var[i] * model.LL_PRIM[t].L * model.LL_PRIM[t].P_D[i] for t in model.T for i in model.I))
+        model.TOTAL_DEMAND = Expression(expr=sum(model.LL_PRIM[t].L * model.LL_PRIM[t].P_D[i] for t in model.T for i in model.I))
+        model.AVERAGE_PRICE = Expression(expr=model.TOTAL_REVENUE / model.TOTAL_DEMAND)
+        
+        # Expression for total emissions and average emissions intensity
+        model.TOTAL_EMISSIONS = Expression(expr=sum(model.LL_PRIM[t].P[g] * model.LL_PRIM[t].L * model.E[g] for g in model.G for t in model.T))
+        model.AVERAGE_EMISSIONS_INTENSITY = Expression(expr=model.TOTAL_EMISSIONS / model.TOTAL_DEMAND)
+        
+        # Expression for net scheme revenue
+        model.NET_SCHEME_REVENUE = Expression(expr=sum((model.E[g] - model.phi) * model.tau * model.LL_PRIM[t].P[g] * model.LL_PRIM[t].L for g in model.G for t in model.T))
 
         # Constraints used to minimise difference between average wholesale price and target
-        model.x_1_cons = Constraint(expr=model.x_1 >= model.avg_price - model.target_price)
-        model.x_2_cons = Constraint(expr=model.x_2 >= model.target_price - model.avg_price)
+        model.x_1_CONS = Constraint(expr=model.x_1 >= model.AVERAGE_PRICE - model.TARGET_PRICE)
+        model.x_2_CONS = Constraint(expr=model.x_2 >= model.TARGET_PRICE - model.AVERAGE_PRICE)
 
         # MPPDC objective function
-        def mppdc_objective_rule(model):
+        def MPPDC_OBJECTIVE_RULE(model):
             return model.x_1 + model.x_2
-        model.mppdc_objective = Objective(rule=mppdc_objective_rule, sense=minimize)
+        model.MPPDC_OBJECTIVE = Objective(rule=MPPDC_OBJECTIVE_RULE, sense=minimize)
 
         
         # Useful functions
         # ----------------
         def _fix_LLPRIM_vars():
-            """Fix generator output, voltage angles, load shedding and HVDC power flows."""
+            "Fix generator output, voltage angles, and HVDC power flows."
             for t in model.T:
                 for g in model.G:
                     model.LL_PRIM[t].P[g].fix()
@@ -618,7 +721,7 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
                     model.LL_PRIM[t].vang[i].fix()
                     
         def _unfix_LLPRIM_vars():
-            """Unfix generator output, voltage angles, load shedding and HVDC power flows."""
+            "Unfix generator output, voltage angles, and HVDC power flows"
             for t in model.T:
                 for g in model.G:
                     model.LL_PRIM[t].P[g].unfix()
@@ -627,119 +730,63 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
                 for i in model.I:
                     model.LL_PRIM[t].vang[i].unfix()
                     
-        def _store_output(results, index):
-            """Store parameters and selected variable values from model output"""
+        def _store_output(results):
+            "Store fixed variable values in solutions set of model object"
             
-            # Model options
-            results[index]['date_range'] = date_range
-            results[index]['fix_hydro'] = fix_hydro
 
-            # Store generator output
-            print('Storing generator output')
+            print('Storing fixed variables')
             for t in model.T:
+                # Store generator output
                 for g in model.G:
-                    results[index]['Solution'][0]['Variable']['LL_PRIM[{0}].P[{1}]'.format(t, g)] = {'Value': model.LL_PRIM[t].P[g].value}
-
-            # Store fixed nodal power injections and nodal demand
-            print('Storing fixed nodal power injections')
-            for t in model.T:
+                    results['Solution'][0]['Variable']['LL_PRIM[{0}].P[{1}]'.format(t, g)] = {'Value': model.LL_PRIM[t].P[g].value}
+                
+                # Store voltage angles
                 for i in model.I:
-                    # Fixed nodal power injections
-                    results[index]['Solution'][0]['Variable']['LL_PRIM[{0}].P_R[{1}]'.format(t, i)] = {'Value': model.LL_PRIM[t].P_R[i].value}
+                    results['Solution'][0]['Variable']['LL_PRIM[{0}].vang[{1}]'.format(t, i)] = {'Value': model.LL_PRIM[t].vang[i].value}
+                    
+                # Store HVDC power flows
+                for m in model.M:
+                    results['Solution'][0]['Variable']['LL_PRIM[{0}].H[{1}]'.format(t, m)] = {'Value': model.LL_PRIM[t].H[m].value}
 
-                    # Demand
-                    results[index]['Solution'][0]['Variable']['LL_PRIM[{0}].P_D[{1}]'.format(t, i)] = {'Value': model.LL_PRIM[t].P_D[i].value}
-
-            results[index]['Solution'][0]['Variable']['tau'] = {'Value': model.tau.value}
-            results[index]['Solution'][0]['Variable']['phi'] = {'Value': model.phi.value}
-            
             return results
-
+            
+        
         # Solve model for each policy parameter scenario
         # ----------------------------------------------
         print('Updating demand and fixed power injection parameters')
-        for index, date_range in enumerate(date_range_list):
-            # Initialise dictionary to store model output
-            results = {}
-            
-            for p in model.T:
-                # Time stamp
-                t = date_range[p - 1]
-
-                for i in model.I:
-                    # Node demand [MW]
-                    model.LL_PRIM[p].P_D[i] = float(df_regd.loc[t, df_m.loc[i, 'NEM_REGION']] * df_m.loc[i, 'PROP_REG_D'])
-
-                    # Power injections from intermittent sources [MW] (+ hydro if fix_hydro = True)
-                    if fix_hydro:
-                        model.LL_PRIM[p].P_R[i] = float(df_inter.loc[t, i]) + float(df_fx_hydro.loc[t, i])
-                    else:
-                        model.LL_PRIM[p].P_R[i] = float(df_inter.loc[t, i])     
         
+        # Initialise dictionary to store model output
+        results = {}
 
-            if mode is 'calc_phi_tau':                
-                # Emissions intensity targets
-                for E in E_list:
-                    
-                    # Target wholesale electricity price
-                    for target_price in target_price_list:
-                        model.target_price = target_price
-                        
-                        # Revenue constraints
-                        if not R_list:
-                            R_list = [None]
-                        
-                        for R in R_list:
-                            # Start time for scenario run
+        # Loop through scenarios - initialise parameters for demand and fixed power injections
+        for t in model.T:
+            # Loop through nodes
+            for i in model.I:
+                # Node demand [MW]
+                model.LL_PRIM[t].P_D[i] = float(model_data.df_scenarios.loc[t, ('demand', i)])
+
+                # Power injections from intermittent sources + hydro [MW]
+                model.LL_PRIM[t].P_R[i] = float(model_data.df_scenarios.loc[t, ('intermittent', i)] + model_data.df_scenarios.loc[t, ('hydro', i)])
+
+        if mode is 'find_price_targeting_baseline':
+            # Loop through permit prices
+             for tau in tau_list:
+                    # Loop through price targets
+                    for target_bau_average_price_multiple in target_bau_average_price_multiple_list:
+                        # Loop through revenue targets
+                        for R in R_list:     
+                            # Start time
                             t0 = time.time()
-                            
-                            # Construct file name based on parameters
-                            fname = 'MPPDC_CalcPhiTau_E_{0}_R_{1}_tarp_{2:.3f}_FixHydro_{3}.pickle'.format(E, R, target_price, fix_hydro)
-                            print('Starting scenario {0}'.format(fname))
-                            
-                            # Initialise lower and upper permit price bounds. Fix baseline to zero.
-                            tau_up = 100
-                            tau_lo = 0
+
+                            # Fix phi and tau, solve model
                             model.phi.fix(0)
+                            model.tau.fix(tau)
+                            model.TARGET_PRICE = target_bau_average_price_multiple * bau_average_price
+                            model.R = R
 
-                            # Fix value of tau to midpoint of upper and lower bounds
-                            model.tau.fix((tau_up + tau_lo) / 2)
-
-                            # Iteration counter
-                            i = 0
-                            iter_lim = 7
-                            iter_lim_exceeded = False
-                            while i < iter_lim:
-                                # While tolerance not satisfied (0.01 tCO2/MWh) or iteration not limit exceeded (7)
-                                # (Print message if tolerance limit exceeded)
-
-                                # Run model and compute average emissions intensity
-                                r_tau = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
-
-                                # Average emissions intensity
-                                avg_em_int = (sum(model.LL_PRIM[t].P[g].value * df_g.loc[g, 'EMISSIONS'] for t in model.T for g in model.G)
-                                              / (sum(model.LL_PRIM[t].P[g].value for t in model.T for g in model.G) + sum(model.LL_PRIM[t].P_R[i].value for t in model.T for i in model.I)))
-                                print('Finished iteration {0}, average emissions intensity = {1}'.format(i, avg_em_int))
-
-                                # Check if emissions intensity is sufficiently close to target
-                                if abs(E - avg_em_int) < 0.01:
-                                    break
-
-                                else:                
-                                    # If emissions intensity > target, set lower bound to previous guess, recompute new permit price
-                                    if avg_em_int > E: 
-                                        tau_lo = model.tau.value
-                                        model.tau.fix((tau_up + tau_lo) / 2)
-
-                                    # If emissions intensity < target, set upper bound to previous guess, recompute new permit price
-                                    else:
-                                        tau_up = model.tau.value
-                                        model.tau.fix((tau_up + tau_lo) / 2)
-
-                                i += 1
-                                if i == iter_lim:
-                                    iter_lim_exceeded = True
-                                    print('Iteration limit exceeded. Exiting loop.')
+                            # Solve model for fixed permit price and baseline
+                            r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
+                            print('Finished first stage')
 
                             # Fix lower level primal variables to their current values
                             _fix_LLPRIM_vars()
@@ -747,253 +794,298 @@ def run_model(date_range_list, model_type=None, mode=None, fix_hydro=False, tau_
                             # Free phi
                             model.phi.unfix()
 
-                            # Re-run model to compute baseline that optimises average price deviation objective
-                            r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
-
-                            # Store solutions
+                            # Re-run model to compute baseline that minimise difference between average price and target
+                            r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)                               
+                            
+                            # Store solutions in results object
                             model.solutions.store_to(r)
-                            results[index] = r
-                            results[index]['E'] = E
-                            results[index]['R'] = R
-                            results[index]['target_price'] = target_price
-                            results[index]['iter_lim_exceeded'] = iter_lim_exceeded
-                            results[index]['date_range'] = date_range
-                            results[index]['fix_hydro'] = fix_hydro
                             
-                            # Also store values for some fixed parameters
-                            results = _store_output(results, index)
-                            
-                            with open(os.path.join(output_dir, fname), 'wb') as f:
-                                pickle.dump(results, f)
+                            # Add fixed generator and node data to model object
+                            r = _store_output(r)
+
+                            # Convert results object to DataFrame
+                            try:
+                                df_results = pd.DataFrame(r['Solution'][0])
+                                df_results['AVERAGE_PRICE'] = model.AVERAGE_PRICE.expr()
+                                df_results['FIXED_TAU'] = tau
+                                df_results['TARGET_PRICE'] = model.TARGET_PRICE.value
+                                df_results['TARGET_PRICE_BAU_MULTIPLE'] = target_bau_average_price_multiple
+                                df_results['REVENUE_CONSTRAINT'] = model.R.value
+                                df_results['MODE'] = mode
+
+                            except:
+                                df_results = 'infeasible'   
+                                print('FAILED TO SAVE DATA')
+
+                            # Construct file name based on parameters
+                            fname = 'MPPDC-FIND_PRICE_TARGETING_BASELINE-PERMIT_PRICE_{0}-REVENUE_CONSTRAINT_{1}-TARGET_PRICE_BAU_MULTIPLE_{2}.pickle'.format(tau, int(R), target_bau_average_price_multiple)
+
+                            with open(os.path.join(paths.output_dir, fname), 'wb') as f:
+                                pickle.dump(df_results, f)
 
                             # Unfix lower level problem primal variables
                             _unfix_LLPRIM_vars()
 
                             print('Finished {0} in {1}s'.format(fname, time.time() - t0))
 
-            if mode is 'calc_phi':
-                 for tau in tau_list:
-                        for target_price in target_price_list:
-                            if not R_list:
-                                R_list = [None]
-                            for R in R_list:     
-                                # Start time
-                                t0 = time.time()
-                                
-                                # Fix phi and tau, solve model
-                                model.phi.fix(0)
-                                model.tau.fix(tau)
-                                model.target_price = target_price
-                                
-                                r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
-                                print('Finished first stage')
-                                
-                                # Fix lower level primal variables to their current values
-                                _fix_LLPRIM_vars()
-                                
-                                # Free phi
-                                model.phi.unfix()
+        elif mode is 'fixed_policy_parameters':
+            # Loop through fixed permit price scenarios
+            for tau in tau_list:
+                # Loop through fixed baseline scenarios
+                for phi in phi_list:
+                    # Loop through different average wholesale price targets
+                    for target_bau_average_price_multiple in target_bau_average_price_multiple_list:
+                        # Start time
+                        t0 = time.time()
 
-                                # Re-run model to compute baseline that optimises average price deviation objective
-                                r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)                               
+                        # Construct file name based on parameters
+                        fname = 'MPPDC-FIXED_PARAMETERS-BASELINE_{0}-PERMIT_PRICE_{1}.pickle'.format(phi, tau)
+                        print('Starting scenario {0}'.format(fname))
 
-                                # Store solutions
-                                model.solutions.store_to(r)
-                                results[index] = r
-                                results[index]['R'] = R
-                                results[index]['target_price'] = target_price
-                                results[index]['date_range'] = date_range
-                                results[index]['fix_hydro'] = fix_hydro
-                                
-                                # Also store values for fixed parameters
-                                results = _store_output(results, index)
+                        # Fix policy parameters
+                        model.tau.fix(tau)
+                        model.phi.fix(phi)
+                        model.TARGET_PRICE = target_bau_average_price_multiple * bau_average_price
 
-                                # Construct file name based on parameters
-                                fname = 'MPPDC_CalcPhi_tau_{0}_tarp_{1:.3f}_R_{2}_FixHydro_{3}.pickle'.format(tau, target_price, R, fix_hydro)
+                        # Solve model
+                        r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
 
-                                with open(os.path.join(output_dir, fname), 'wb') as f:
-                                    pickle.dump(results, f)
-                                
-                                # Unfix lower level problem primal variables
-                                _unfix_LLPRIM_vars()
+                        # Store solutions
+                        model.solutions.store_to(r)     
 
-                                print('Finished {0} in {1}s'.format(fname, time.time() - t0))
-            
-            if mode is 'calc_fixed':
-                for tau in tau_list:
-                    for phi in phi_list:
-                        for target_price in target_price_list:
-                            # Start time
-                            t0 = time.time()
+                        # Convert results object to DataFrame
+                        try:
+                            df_results = pd.DataFrame(r['Solution'][0])
+                            df_results['AVERAGE_PRICE'] = model.AVERAGE_PRICE.expr()
+                            df_results['FIXED_PHI'] = phi
+                            df_results['FIXED_TAU'] = tau
+                            df_results['TARGET_PRICE'] = model.TARGET_PRICE.value
+                            df_results['TARGET_PRICE_BAU_MULTIPLE'] = target_bau_average_price_multiple
+                            df_results['MODE'] = mode
+
+                        except:
+                            df_results = 'infeasible'  
+                            print('FAILED TO SAVE DATA')
+
+                        # Save DataFrame objects
+                        with open(os.path.join(paths.output_dir, fname), 'wb') as f:
+                            pickle.dump(df_results, f)
+
+                        print('Finished {0} in {1}s'.format(fname, time.time() - t0))
+        
+        elif mode is 'find_permit_price_and_baseline':  
+            # Add net scheme revenue constraint
+            model.SCHEME_REVENUE_CONSTRAINT = Constraint(expr=model.NET_SCHEME_REVENUE >= model.MIN_SCHEME_REVENUE)
+                        
+            # Emissions intensity target
+            for target_average_emissions_intensity in E_list:
+                # Average wholesale price targets
+                for target_bau_average_price_multiple in target_bau_average_price_multiple_list:
+                    # Revenue constraint targets
+                    for min_scheme_revenue in R_list:
+                        # Start timer for scenario run
+                        t0 = time.time()
+                        
+                        # Construct file name based on parameters
+                        fname = 'MPPDC-FIND_PERMIT_PRICE_AND_BASELINE-EMISSIONS_INTENSITY_TARGET_{0}-TARGET_PRICE_BAU_MULTIPLE_{1}-MIN_SCHEME_REVENUE_{2}.pickle'.format(target_average_emissions_intensity, target_bau_average_price_multiple, min_scheme_revenue)
+                        print('Starting scenario {0}'.format(fname))
+                        
+                        # Target average wholesale price
+                        model.TARGET_PRICE = target_bau_average_price_multiple * bau_average_price
+                        
+                        # Scheme revenue constraint (must be greater than or equal to target)
+                        model.MIN_SCHEME_REVENUE = min_scheme_revenue
+                        
+                        # Initialise lower and upper permit price bounds. Fix baseline to zero.
+                        tau_up = 100
+                        tau_lo = 0
+                        model.phi.fix(0)
+                        
+                        # Fix value of tau to midpoint of upper and lower bounds
+                        model.tau.fix((tau_up + tau_lo) / 2)
+                        
+                        # Iteration counter
+                        counter = 0
+                        iteration_limit = 7
+                        while counter <= iteration_limit:
+                            # While tolerance not satisfied (0.01 tCO2/MWh) or iteration not limit exceeded
+                            # (Print message if tolerance limit exceeded)
+
+                            # Run model
+                            opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
+
+                            # Compute average emissions intensity
+                            average_emissions_intensity = model.AVERAGE_EMISSIONS_INTENSITY.expr()
+                            print('Finished iteration {0}, average emissions intensity: {1} tCO2/MWh'.format(counter, average_emissions_intensity))
+
+                            # Check if emissions intensity is sufficiently close to target
+                            if abs(target_average_emissions_intensity - average_emissions_intensity) < 0.01:
+                                break
+
+                            else:                
+                                # If emissions intensity > target, set lower bound to previous guess, recompute new permit price
+                                if average_emissions_intensity > target_average_emissions_intensity: 
+                                    tau_lo = model.tau.value
+                                    model.tau.fix((tau_up + tau_lo) / 2)
+
+                                # If emissions intensity < target, set upper bound to previous guess, recompute new permit price
+                                else:
+                                    tau_up = model.tau.value
+                                    model.tau.fix((tau_up + tau_lo) / 2)
+
+                            # Break loop if iteration limit exceeded. Print message to console.
+                            if counter == iteration_limit:
+                                print('Iteration limit exceeded. Exiting loop.')   
                             
-                            # Construct file name based on parameters
-                            fname = 'MPPDC_CalcFixed_tau_{0}_phi_{1}_tarp_{2}_FixHydro_{3}.pickle'.format(tau, phi, target_price, fix_hydro)
-                            print('Starting scenario {0}'.format(fname))
+                            # Increment counter
+                            counter += 1
 
-                            # Fix policy parameters
-                            model.tau.fix(tau)
-                            model.phi.fix(phi)
-                            model.target_price = target_price
+                        # Fix lower level primal variables to their current values
+                        _fix_LLPRIM_vars()
 
-                            # Solve model
-                            r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
+                        # Free phi
+                        model.phi.unfix()
 
-                            # Store solutions
-                            model.solutions.store_to(r)
-                            results[index] = r
-                            results[index]['target_price'] = target_price
-                            results[index]['date_range'] = date_range
-                            results[index]['fix_hydro'] = fix_hydro
-                            
-                            # Also store values for fixed parameters
-                            results = _store_output(results, index)
+                        # Re-run model to compute baseline that optimises average price deviation objective
+                        r = opt.solve(model, keepfiles=keepfiles, tee=stream_solver, options=solver_opt)
+                       
+                        # Store solutions
+                        model.solutions.store_to(r)     
 
-                            with open(os.path.join(output_dir, fname), 'wb') as f:
-                                pickle.dump(results, f)
+                        # Convert results object to DataFrame
+                        try:
+                            df_results = pd.DataFrame(r['Solution'][0])
+                            df_results['AVERAGE_PRICE'] = model.AVERAGE_PRICE.expr()
+                            df_results['AVERAGE_EMISSIONS_INTENSITY'] = model.AVERAGE_EMISSIONS_INTENSITY.expr()
+                            df_results['NET_SCHEME_REVENUE'] = model.NET_SCHEME_REVENUE.expr()
+                            df_results['TARGET_EMISSIONS_INTENSITY'] = target_average_emissions_intensity
+                            df_results['MIN_SCHEME_REVENUE'] = model.MIN_SCHEME_REVENUE.value
+                            df_results['TARGET_PRICE'] = model.TARGET_PRICE.value
+                            df_results['TARGET_PRICE_BAU_MULTIPLE'] = target_bau_average_price_multiple
+                            df_results['PHI'] = model.phi.value
+                            df_results['TAU'] = model.tau.value
+                            df_results['MODE'] = mode
 
-                            print('Finished {0} in {1}s'.format(fname, time.time() - t0))                                
+                        except:
+                            df_results = 'infeasible'  
+                            print('FAILED TO SAVE DATA')
+
+                        # Save DataFrame objects
+                        with open(os.path.join(paths.output_dir, fname), 'wb') as f:
+                            pickle.dump(df_results, f)
+                                
+                        # Unfix lower level problem primal variables
+                        _unfix_LLPRIM_vars()
+
+                        print('Finished {0} in {1}s'.format(fname, time.time() - t0))
+        else:
+            raise(Warning('Model {0} not recognised'.format(mode)))
 
 
 # ### DCOPF Results
+# Standard DCOPF model used to verify that MPPDC has been formulated correctly.
+
+# In[8]:
+
+
+# Loop through permit prices
+for permit_price in [0]:
+    # Loop through baselines
+    for baseline in [0]:    
+        # Get results for policy scenario
+        results = run_model(model_type='DCOPF', stream_solver=False, fix_phi=baseline, fix_tau=permit_price)
+
+        # Construct file name
+        fname = 'DCOPF-FIXED_PARAMETERS-PERMIT_PRICE_{0}-BASELINE_{1}.pickle'.format(permit_price, baseline)
+
+        # Save to file
+        with open(os.path.join(paths.output_dir, fname), 'wb') as f:
+            pickle.dump(results, f)
+
+
+# ### MPPDC Results
+# #### Fixed permit price and baseline
+# Fix permit price and baseline. Results should be the same for the DCOPF base-case.
 
 # In[9]:
 
 
-# Dates for which the DCOPF model should be executed
-# start = '2017-01-01 01:00:00'
-# end = '2018-01-01 00:00:00'
-# date_range = pd.date_range(start, end, freq='1H')
+# Not required, but could potentially impact way in which solver performs, hence the reason for recording this value
+target_price_list = [1] 
 
-# Run DCOPF for each period in synthetic time series
-# --------------------------------------------------
-date_range = load_profile_dates
-
-# Split long date range into n chunks
-def create_date_range_chunks(date_range, n):
-    """Split date_range into a list of n chunks"""
-    for i in range(0, len(date_range), n):
-        yield date_range[i:i+n]
-date_range_chunks = create_date_range_chunks(date_range, 876)
-
-tau_list = [0]
+# Emissions intensity baselines
 phi_list = [0]
-fix_hydro = True
 
-i = 1
-# For each date range chunk, fix the value run DCOPF model for different values of phi and tau
-for date_range_chunk in date_range_chunks:
-    for fix_tau in tau_list:
-        for fix_phi in phi_list:        
-            results = run_model(date_range_chunk, model_type='dcopf', fix_hydro=fix_hydro, stream_solver=False, fix_phi=fix_phi, fix_tau=fix_tau, **model_data)
-            
-            # Construct file name
-            fname = 'DCOPF_CalcFixed_tau_{0}_phi_{1}_FixHydro_{2}-{3}.pickle'.format(fix_tau, fix_phi, fix_hydro, i)
-            
-            # Save to file
-            with open(os.path.join(output_dir, fname), 'wb') as f:
-                pickle.dump(results, f)
-    i += 1
+# Permit prices
+tau_list = list(range(0, 71, 2))
+tau_list = [0, 10]
+
+# Run model
+run_model(model_type='MPPDC', 
+          mode='fixed_policy_parameters', 
+          stream_solver=True, phi_list=phi_list, 
+          tau_list=tau_list, target_bau_average_price_multiple_list=target_price_list, 
+          bau_average_price=30)
 
 
-# ### MPPDC Results
-# Define time horizon for model.
+# #### Compute baseline given fixed permit price
+# Calculate emissions intensity baseline that achieves a given average wholesale price target for a given permit price. Set the base-case wholesale price target to be the business-as-usual (BAU) price.
 
 # In[10]:
 
 
-date_range_list = [load_profile_dates] # One day randomly selected from summer and winter
-
-
-# #### Fixed permit price and baseline
-# Fix permit price and baseline. Results should be the same for the DCOPF base-case.
-
-# In[11]:
-
-
-# Policy parameter scenarios
-target_price_list = [30] # Not required, but could potentially impact way in which solver performs, hence the reason for recording this value
-phi_list = [0]
-tau_list = list(range(0, 71, 2))
-
-
-# FOR TESTING - NEED TO CHANGE LATER
-# ----------------------------------
-# tau_list = list(range(0, 81, 20))
-
-
-# Run model
-# ---------
-run_model(date_range_list, model_type='mppdc', mode='calc_fixed', fix_hydro=True, stream_solver=True, phi_list=phi_list, tau_list=tau_list, target_price_list=target_price_list, **model_data)
-
-
-# #### Compute baseline given fixed permit price
-# Calculate optimal emissions intensity baseline for a given permit price and average wholesale price target. Set the base-case wholesale price target to be the business-as-usual (BAU) price.
-
-# In[12]:
-
-
-def compute_bau_price():
-    "Compute business as usual price"
-
-    with open(os.path.join(output_dir, 'MPPDC_CalcFixed_tau_0_phi_0_tarp_30_FixHydro_True.pickle'), 'rb') as f:
+with open(os.path.join(paths.output_dir, 'MPPDC-FIXED_PARAMETERS-BASELINE_0-PERMIT_PRICE_0.pickle'), 'rb') as f:
         bau_scenario = pickle.load(f)
 
-    # Initialise variables to sum total demand
-    total_demand = 0
-    total_revenue = 0
-
-    # Loop through time stamps and nodes, computing revenues and demand at each node
-    for t in range(1, 49):
-        for i in range(1, 913):
-            price = bau_scenario[0]['Solution'][0]['Variable']['LL_DUAL[{0}].lambda_var[{1}]'.format(t, i)]['Value']
-            demand = bau_scenario[0]['Solution'][0]['Variable']['LL_PRIM[{0}].P_D[{1}]'.format(t, i)]['Value']
-
-            revenue = price * demand
-
-            total_demand += demand
-            total_revenue += revenue
-
-    # Compute average price
-    average_price = total_revenue / total_demand
-
-    return average_price
-
-bau_p = compute_bau_price()
-print('Average price = {0}'.format(bau_p))
+# Average BAU price
+bau_average_price = bau_scenario['AVERAGE_PRICE'].unique()[0]
+print('Average price = {0}'.format(bau_average_price))
 
 
 # Define parameters for policy scenarios.
 
-# In[13]:
+# In[11]:
 
 
-# Policy parameter scenarios
-target_price_list = [0.8*bau_p, 0.9*bau_p, bau_p, 1.1*bau_p, 1.2*bau_p]
+# Target average wholesale prices as a multiple of the BAU price
+target_bau_average_price_multiple_list = [0.8, 0.9, 1, 1.1, 1.2]
+target_bau_average_price_multiple_list = [1.2]
+
+# Permit prices
 tau_list = list(range(2, 71, 2))
-
-
-# FOR TESTING - NEED TO CHANGE LATER
-# ----------------------------------
-# target_price_list = [1.2*bau_p]
-# tau_list = list(range(16, 71, 20))
-
+tau_list = [10]
 
 # Run model
-# ---------
-run_model(date_range_list, model_type='mppdc', mode='calc_phi', fix_hydro=True, stream_solver=True, tau_list=tau_list, target_price_list=target_price_list, **model_data)
+run_model(model_type='MPPDC',
+          mode='find_price_targeting_baseline', 
+          stream_solver=True, 
+          tau_list=tau_list, 
+          R_list=[-9e9], 
+          target_bau_average_price_multiple_list=target_bau_average_price_multiple_list, 
+          bau_average_price=bau_average_price)
 
 
-# #### Compute baseline and permit price given emissions intensity and wholesale price targets (and optionally a revenue constraint)
-# 
-# For a given emissions intensity target and wholesale price target, compute the required permit price and emissions intensity baseline. (Adding a revenue constraint is also optional).
+# ### Find permit price and baseline given emissions and revenue constraints
 
-# In[14]:
+# In[12]:
 
 
-# # Policy parameter scenarios
-# target_price_list = [25.38]
-# E_list = [0.85]
+# Scheme revenue constraint (net scheme revenue must be greater than or equal to min_scheme_revenue)
+min_scheme_revenue_list = [0]
 
-# # Run model
-# run_model(date_range_list, model_type='mppdc', mode='calc_phi_tau', fix_hydro=True, target_price_list=target_price_list, E_list=E_list, **model_data)
+# Target average emissions intensities
+target_average_emissions_intensity_list = [0.88, 0.92]
+
+# Target average wholesale price as a multiple of the BAU average price
+target_bau_average_price_multiple_list = [0.9]
+
+# Run model
+run_model(model_type='MPPDC',
+          mode='find_permit_price_and_baseline', 
+          stream_solver=True, 
+          tau_list=None, 
+          R_list=min_scheme_revenue_list,
+          E_list=target_average_emissions_intensity_list,
+          target_bau_average_price_multiple_list=target_bau_average_price_multiple_list, 
+          bau_average_price=bau_average_price)
 

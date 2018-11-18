@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8" />
-<title>compile_data</title><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.10/require.min.js"></script>
+<title>create-scenarios</title><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.10/require.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.0.3/jquery.min.js"></script>
 
 <style type="text/css">
@@ -11775,29 +11775,8 @@ div#notebook {
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h1 id="Emissions-Intensity-Scheme-(EIS)-Parameter-Selection">Emissions Intensity Scheme (EIS) Parameter Selection<a class="anchor-link" href="#Emissions-Intensity-Scheme-(EIS)-Parameter-Selection">&#182;</a></h1><p>This notebook collates data from several sources which will then be used to test a mathematical framework for selecting EIS parameters.</p>
-<p>Steps taken to compile data:</p>
-<ol>
-<li>Import packages and declare declare paths to files</li>
-<li>Load data:<ul>
-<li>generator data;</li>
-<li>network edges;</li>
-<li>network HVDC interconnector data;</li>
-<li>network AC interconnector data;</li>
-<li>network nodes;</li>
-<li>NEM demand and dispatch data for 2017.</li>
-</ul>
-</li>
-<li>Combine network data:<ul>
-<li>construct admittance matrix;</li>
-<li>compute demand signals for each node;</li>
-<li>construct signals for power injections from intermittent sources for each node;</li>
-<li>HVDC incidence matrix;</li>
-<li>define reference nodes.</li>
-</ul>
-</li>
-<li>Place model data in a dictionary and pickle.</li>
-</ol>
+<h1 id="Scenario-Construction">Scenario Construction<a class="anchor-link" href="#Scenario-Construction">&#182;</a></h1><p>Demand and dispatch data are obtained from the Australian Energy Market Operator's (AEMO's) Market Management System Database Model (MMSDM) [1], and a k-means clustering algorithm is implemented using the method outlined in [2] to create a reduced set of representative operating scenarios. The dataset described in [3,4] is used to identify specific generators, and assign historic power injections or withdrawals to individual nodes.</p>
+<p>In this analysis data for 2017 is considered, with demand and dispatch time series re-sampled to 30min intervals, corresponding to the length of a trading interval within Australia's National Electricity Market (NEM). Using these data a reduced set of 48 operating conditions are constructed. These operating scenarios are comprised on demand, intermittent renewable injections, and fixed power injections from hydro generators.</p>
 <h2 id="Import-packages">Import packages<a class="anchor-link" href="#Import-packages">&#182;</a></h2>
 </div>
 </div>
@@ -11808,12 +11787,21 @@ div#notebook {
 <div class="inner_cell">
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">math</span>
 <span class="kn">import</span> <span class="nn">pickle</span>
+<span class="kn">import</span> <span class="nn">random</span>
 <span class="kn">import</span> <span class="nn">zipfile</span>
 <span class="kn">from</span> <span class="nn">io</span> <span class="k">import</span> <span class="n">BytesIO</span>
 
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+
+<span class="c1"># Initialise random number generator</span>
+<span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="c1"># Used to slice pandas DataFrames</span>
+<span class="n">idx</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">IndexSlice</span>
 </pre></div>
 
 </div>
@@ -11825,7 +11813,7 @@ div#notebook {
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Declare-paths-to-files">Declare paths to files<a class="anchor-link" href="#Declare-paths-to-files">&#182;</a></h2>
+<h2 id="Paths-to-files">Paths to files<a class="anchor-link" href="#Paths-to-files">&#182;</a></h2>
 </div>
 </div>
 </div>
@@ -11834,14 +11822,14 @@ div#notebook {
 <div class="prompt input_prompt">In&nbsp;[2]:</div>
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Core data directory</span>
-<span class="n">data_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">curdir</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">pardir</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">pardir</span><span class="p">,</span> <span class="s1">&#39;data&#39;</span><span class="p">))</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Contains network information and generator parameters</span>
+<span class="n">data_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">curdir</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">pardir</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">pardir</span><span class="p">,</span> <span class="s1">&#39;data&#39;</span><span class="p">)</span>
 
-<span class="c1"># Output directory</span>
-<span class="n">output_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">curdir</span><span class="p">,</span> <span class="s1">&#39;output&#39;</span><span class="p">))</span>
+<span class="c1"># MMSDM historic demand and dispatch signals</span>
+<span class="n">archive_dir</span> <span class="o">=</span> <span class="sa">r</span><span class="s1">&#39;D:\nemweb\Reports\Data_Archive\MMSDM\zipped&#39;</span>
 
-<span class="c1"># MMSDM data - SEE NOTE BELOW</span>
-<span class="n">archive_dir</span> <span class="o">=</span> <span class="s1">&#39;D:</span><span class="se">\\</span><span class="s1">nemweb</span><span class="se">\\</span><span class="s1">Reports</span><span class="se">\\</span><span class="s1">Data_Archive</span><span class="se">\\</span><span class="s1">MMSDM</span><span class="se">\\</span><span class="s1">zipped&#39;</span>
+<span class="c1"># Location for output files</span>
+<span class="n">output_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">curdir</span><span class="p">,</span> <span class="s1">&#39;output&#39;</span><span class="p">)</span>
 </pre></div>
 
 </div>
@@ -11853,16 +11841,7 @@ div#notebook {
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p><code>archive_dir</code> points to local directory containing MMSDM database files which were downloaded from [1]. If you  have already downloaded zipped monthly archives of MMSDM data and wish to replicate the results in their entirety, please update the archive directory path accordingly (so that it points to the directory containing MMSDM zipped archives on your machine). As will be shown below, I have created a class that extracts MMSDM data from zipped archives. Using this class I have collated unit dispatch and demand data, placed these data into Pandas DataFrames, and saved these DataFrames as pickled files. These pickled files are made available as part of the repository so you don't have to download the original MMSDM archives.</p>
-
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Load-data">Load data<a class="anchor-link" href="#Load-data">&#182;</a></h2>
+<h2 id="Import-generator-and-network-information">Import generator and network information<a class="anchor-link" href="#Import-generator-and-network-information">&#182;</a></h2>
 </div>
 </div>
 </div>
@@ -11871,22 +11850,10 @@ div#notebook {
 <div class="prompt input_prompt">In&nbsp;[3]:</div>
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Generator data</span>
-<span class="n">df_g</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_dir</span><span class="p">,</span> <span class="s1">&#39;generators.csv&#39;</span><span class="p">),</span> <span class="n">index_col</span><span class="o">=</span><span class="s1">&#39;DUID&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;NODE&#39;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">})</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Generator information</span>
+<span class="n">df_g</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_dir</span><span class="p">,</span> <span class="s1">&#39;generators.csv&#39;</span><span class="p">),</span> <span class="n">index_col</span><span class="o">=</span><span class="s1">&#39;DUID&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;NODE&#39;</span><span class="p">:</span> <span class="nb">int</span><span class="p">})</span>
 
-<span class="c1"># Network edges</span>
-<span class="n">df_e</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_dir</span><span class="p">,</span> <span class="s1">&#39;network_edges.csv&#39;</span><span class="p">),</span> <span class="n">index_col</span><span class="o">=</span><span class="s1">&#39;LINE_ID&#39;</span><span class="p">)</span>
-
-<span class="c1"># Network HVDC link information</span>
-<span class="n">df_hvdc</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_dir</span><span class="p">,</span> <span class="s1">&#39;network_hvdc_links.csv&#39;</span><span class="p">),</span> <span class="n">index_col</span><span class="o">=</span><span class="s1">&#39;HVDC_LINK_ID&#39;</span><span class="p">)</span>
-
-<span class="c1"># AC interconnector links</span>
-<span class="n">df_ac_i</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_dir</span><span class="p">,</span> <span class="s1">&#39;network_ac_interconnector_links.csv&#39;</span><span class="p">),</span> <span class="n">index_col</span><span class="o">=</span><span class="s1">&#39;INTERCONNECTOR_ID&#39;</span><span class="p">)</span>
-
-<span class="c1"># AC interconnector flow limits</span>
-<span class="n">df_ac_i_lim</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_dir</span><span class="p">,</span> <span class="s1">&#39;network_ac_interconnector_flow_limits.csv&#39;</span><span class="p">),</span> <span class="n">index_col</span><span class="o">=</span><span class="s1">&#39;INTERCONNECTOR_ID&#39;</span><span class="p">)</span>
-
-<span class="c1"># Network nodes</span>
+<span class="c1"># Network node information</span>
 <span class="n">df_n</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_dir</span><span class="p">,</span> <span class="s1">&#39;network_nodes.csv&#39;</span><span class="p">),</span> <span class="n">index_col</span><span class="o">=</span><span class="s1">&#39;NODE_ID&#39;</span><span class="p">)</span>
 </pre></div>
 
@@ -11899,7 +11866,7 @@ div#notebook {
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p>Class to extract data directly from MMSDM archives.</p>
+<h2 id="Extract-data">Extract data<a class="anchor-link" href="#Extract-data">&#182;</a></h2><p>Functions used to extract data from MMSDM tables.</p>
 
 </div>
 </div>
@@ -11909,68 +11876,122 @@ div#notebook {
 <div class="prompt input_prompt">In&nbsp;[4]:</div>
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="k">class</span> <span class="nc">ExtractArchiveData</span><span class="p">:</span>
-    <span class="sd">&quot;&quot;&quot;Extract data from MMSDM archive files&quot;&quot;&quot;</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="k">def</span> <span class="nf">dispatch_unit_scada</span><span class="p">(</span><span class="n">file</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Extract generator dispatch data</span>
+<span class="sd">    </span>
+<span class="sd">    Params</span>
+<span class="sd">    ------</span>
+<span class="sd">    file : bytes IO object</span>
+<span class="sd">        Zipped CSV file of given MMSDM table</span>
+<span class="sd">    </span>
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    df : pandas DataFrame</span>
+<span class="sd">        MMSDM table in formatted pandas DataFrame</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     
-    <span class="k">def</span> <span class="nf">_init_</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">pass</span>
-    
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">get_dispatch_unit_scada</span><span class="p">(</span><span class="n">file</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Extract dispatch data&quot;&quot;&quot;</span>
-    
-        <span class="c1"># Columns to extract    </span>
-        <span class="n">cols</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;DUID&#39;</span><span class="p">,</span> <span class="s1">&#39;SCADAVALUE&#39;</span><span class="p">,</span> <span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">]</span>
+    <span class="c1"># Columns to extract    </span>
+    <span class="n">cols</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;DUID&#39;</span><span class="p">,</span> <span class="s1">&#39;SCADAVALUE&#39;</span><span class="p">,</span> <span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">]</span>
 
-        <span class="c1"># Read in data</span>
-        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="n">usecols</span><span class="o">=</span><span class="n">cols</span><span class="p">,</span> <span class="n">parse_dates</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">],</span> <span class="n">skiprows</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Read in data</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="n">usecols</span><span class="o">=</span><span class="n">cols</span><span class="p">,</span> <span class="n">parse_dates</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">],</span> <span class="n">skiprows</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
-        <span class="c1"># Drop rows without DUIDs, apply pivot</span>
-        <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;DUID&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s1">&#39;DUID&#39;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s1">&#39;SCADAVALUE&#39;</span><span class="p">)</span>
+    <span class="c1"># Drop rows without DUIDs, apply pivot</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;DUID&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s1">&#39;DUID&#39;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s1">&#39;SCADAVALUE&#39;</span><span class="p">)</span>
+    
+    <span class="k">return</span> <span class="n">df</span>
+
+
+<span class="k">def</span> <span class="nf">tradingregionsum</span><span class="p">(</span><span class="n">file</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Extract half-hourly load data for each NEM region</span>
+<span class="sd">    </span>
+<span class="sd">    Params</span>
+<span class="sd">    ------</span>
+<span class="sd">    file : bytes IO object</span>
+<span class="sd">        Zipped CSV file of given MMSDM table</span>
+<span class="sd">    </span>
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    df : pandas DataFrame</span>
+<span class="sd">        MMSDM table in formatted pandas DataFrame</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># Columns to extract    </span>
+    <span class="n">cols</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;REGIONID&#39;</span><span class="p">,</span> <span class="s1">&#39;TOTALDEMAND&#39;</span><span class="p">,</span> <span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">]</span>
+
+    <span class="c1"># Read in data</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="n">usecols</span><span class="o">=</span><span class="n">cols</span><span class="p">,</span> <span class="n">parse_dates</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">],</span> <span class="n">skiprows</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># Drop rows without DUIDs, apply pivot</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;REGIONID&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s1">&#39;REGIONID&#39;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s1">&#39;TOTALDEMAND&#39;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span>  
+
+
+<span class="k">def</span> <span class="nf">get_data</span><span class="p">(</span><span class="n">archive_path</span><span class="p">,</span> <span class="n">table_name</span><span class="p">,</span> <span class="n">extractor_function</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Open CSV archive and extract data from zipped file</span>
+<span class="sd">    </span>
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    archive_path : str</span>
+<span class="sd">        Path to MMSDM archive containing data for given year</span>
+<span class="sd">    </span>
+<span class="sd">    table_name : str</span>
+<span class="sd">        Name of table in MMSDM archive from which data is to be extracted</span>
+<span class="sd">        </span>
+<span class="sd">    extractor_function : func</span>
+<span class="sd">        Function that takes a bytes object of the unzipped table and returns a formatted DataFrame</span>
+<span class="sd">        </span>
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    df : pandas DataFrame</span>
+<span class="sd">        Formatted DataFrame of the desired MMSDM table    </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># Open MMSDM archive for a given year</span>
+    <span class="k">with</span> <span class="n">zipfile</span><span class="o">.</span><span class="n">ZipFile</span><span class="p">(</span><span class="n">archive_path</span><span class="p">)</span> <span class="k">as</span> <span class="n">myzip</span><span class="p">:</span>
         
-        <span class="k">return</span> <span class="n">df</span>
+        <span class="c1"># All files of a particular type in archive (e.g. dispatch, quantity bids, price bands, load)</span>
+        <span class="n">zip_names</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">myzip</span><span class="o">.</span><span class="n">filelist</span> <span class="k">if</span> <span class="p">(</span><span class="n">table_name</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">filename</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="s1">&#39;.zip&#39;</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">filename</span><span class="p">)]</span>
+
+        <span class="c1"># Check that only one zip file is returned, else raise exception</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">zip_names</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s1">&#39;Encounted </span><span class="si">{0}</span><span class="s1"> files in archive, should only encounter 1&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">zip_names</span><span class="p">)))</span>
+
+        <span class="c1"># Get name of csv in zipped folder</span>
+        <span class="n">csv_name</span> <span class="o">=</span> <span class="n">zip_names</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">filename</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;.zip&#39;</span><span class="p">,</span> <span class="s1">&#39;.CSV&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="c1"># Convert zip files to BytesIO object</span>
+        <span class="n">zip_data</span> <span class="o">=</span> <span class="n">BytesIO</span><span class="p">(</span><span class="n">myzip</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">zip_names</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+
+        <span class="c1"># Open inner zipfile and extract data using supplied function</span>
+        <span class="k">with</span> <span class="n">zipfile</span><span class="o">.</span><span class="n">ZipFile</span><span class="p">(</span><span class="n">zip_data</span><span class="p">)</span> <span class="k">as</span> <span class="n">z</span><span class="p">:</span>
+            <span class="k">with</span> <span class="n">z</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">csv_name</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">df</span> <span class="o">=</span> <span class="n">extractor_function</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>      
+    <span class="k">return</span> <span class="n">df</span>
+
+<span class="c1"># Historic demand and dispatch data</span>
+<span class="n">demand</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">dispatch</span> <span class="o">=</span> <span class="p">[]</span>
+
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">13</span><span class="p">):</span>
+    <span class="c1"># Archive name and path from which data will be extracted</span>
+    <span class="n">archive_name</span> <span class="o">=</span> <span class="s1">&#39;MMSDM_2017_</span><span class="si">{0:02}</span><span class="s1">.zip&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+    <span class="n">archive_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">archive_dir</span><span class="p">,</span> <span class="n">archive_name</span><span class="p">)</span>
+
+    <span class="c1"># Extract data</span>
+    <span class="n">dispatch</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">get_data</span><span class="p">(</span><span class="n">archive_path</span><span class="p">,</span> <span class="s1">&#39;DISPATCH_UNIT_SCADA&#39;</span><span class="p">,</span> <span class="n">dispatch_unit_scada</span><span class="p">))</span>
+    <span class="n">demand</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">get_data</span><span class="p">(</span><span class="n">archive_path</span><span class="p">,</span> <span class="s1">&#39;TRADINGREGIONSUM&#39;</span><span class="p">,</span> <span class="n">tradingregionsum</span><span class="p">))</span>
+
+<span class="c1"># Concatenate data from individual months into single DataFrames for load and dispatch</span>
+<span class="n">df_demand</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">demand</span><span class="p">,</span> <span class="n">sort</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="c1"># Demand</span>
+<span class="n">df_dispatch</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">dispatch</span><span class="p">,</span> <span class="n">sort</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="c1"># Dispatch</span>
+
+<span class="c1"># Fill missing values</span>
+<span class="n">df_demand</span> <span class="o">=</span> <span class="n">df_demand</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
     
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">get_tradingregionsum</span><span class="p">(</span><span class="n">file</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Extract half-hourly load data&quot;&quot;&quot;</span>
-    
-        <span class="c1"># Columns to extract    </span>
-        <span class="n">cols</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;REGIONID&#39;</span><span class="p">,</span> <span class="s1">&#39;TOTALDEMAND&#39;</span><span class="p">,</span> <span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">]</span>
-
-        <span class="c1"># Read in data</span>
-        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="n">usecols</span><span class="o">=</span><span class="n">cols</span><span class="p">,</span> <span class="n">parse_dates</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">],</span> <span class="n">skiprows</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-
-        <span class="c1"># Drop rows without DUIDs, apply pivot</span>
-        <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;REGIONID&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s1">&#39;REGIONID&#39;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s1">&#39;TOTALDEMAND&#39;</span><span class="p">)</span>
-        
-        <span class="k">return</span> <span class="n">df</span>  
-    
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span> <span class="nf">extract_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">archive_name</span><span class="p">,</span> <span class="n">file_name</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Given MMSDM monthly archive and file that must be extracted, open zips, transform data and return dataframe&quot;&quot;&quot;</span>
-
-        <span class="k">with</span> <span class="n">zipfile</span><span class="o">.</span><span class="n">ZipFile</span><span class="p">(</span><span class="n">archive_name</span><span class="p">)</span> <span class="k">as</span> <span class="n">myzip</span><span class="p">:</span>
-            <span class="c1"># All files of a particular type (e.g. dispatch, quantity bids, price bands, load)</span>
-            <span class="n">zip_names</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">myzip</span><span class="o">.</span><span class="n">filelist</span> <span class="k">if</span> <span class="p">(</span><span class="n">file_name</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">filename</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="s1">&#39;.zip&#39;</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">filename</span><span class="p">)]</span>
-
-            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">zip_names</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s1">&#39;Encounted </span><span class="si">{0}</span><span class="s1"> files in archive, should only encounter 1&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">zip_names</span><span class="p">)))</span>
-
-            <span class="c1"># Get name of csv</span>
-            <span class="n">csv_name</span> <span class="o">=</span> <span class="n">zip_names</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">filename</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;.zip&#39;</span><span class="p">,</span> <span class="s1">&#39;.CSV&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-
-            <span class="c1"># Convert zip files to BytesIO object</span>
-            <span class="n">zip_data</span> <span class="o">=</span> <span class="n">BytesIO</span><span class="p">(</span><span class="n">myzip</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">zip_names</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
-
-            <span class="k">with</span> <span class="n">zipfile</span><span class="o">.</span><span class="n">ZipFile</span><span class="p">(</span><span class="n">zip_data</span><span class="p">)</span> <span class="k">as</span> <span class="n">z</span><span class="p">:</span>
-                <span class="k">with</span> <span class="n">z</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">csv_name</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-                    <span class="k">if</span> <span class="n">file_name</span> <span class="ow">is</span> <span class="s1">&#39;PUBLIC_DVD_DISPATCH_UNIT_SCADA&#39;</span><span class="p">:</span>
-                        <span class="n">df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_dispatch_unit_scada</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
-                    <span class="k">elif</span> <span class="n">file_name</span> <span class="ow">is</span> <span class="s1">&#39;PUBLIC_DVD_TRADINGREGIONSUM&#39;</span><span class="p">:</span>
-                        <span class="n">df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_tradingregionsum</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
-                    <span class="k">else</span><span class="p">:</span>
-                        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s1">&#39;File type must be one in [PUBLIC_DVD_DISPATCH_UNIT_SCADA, PUBLIC_DVD_TRADINGREGIONSUM]&#39;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">df</span>
+<span class="c1"># Resample to get average power output over 30min trading interval (instead of 5min) dispatch intervals</span>
+<span class="n">df_dispatch</span> <span class="o">=</span> <span class="n">df_dispatch</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">&#39;30min&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;right&#39;</span><span class="p">,</span> <span class="n">closed</span><span class="o">=</span><span class="s1">&#39;right&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
 </pre></div>
 
 </div>
@@ -11982,7 +12003,13 @@ div#notebook {
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p>If pickled files already exists for dispatch and demand data load pickled files directly. Else, run class used to extract data from MMSDM archive.</p>
+<p>Re-index and format data:</p>
+<ol>
+<li>identify intermittent generators (wind and solar);</li>
+<li>identify hydro generators;</li>
+<li>compute nodal demand;</li>
+<li>concatenate demand, hydro dispatch, and intermittent renewables dispatch into a single DataFrame.</li>
+</ol>
 
 </div>
 </div>
@@ -11992,61 +12019,238 @@ div#notebook {
 <div class="prompt input_prompt">In&nbsp;[5]:</div>
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># If pickled dataframes already exist, extract load the dataframes directly</span>
-<span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;df_regd.pickle&#39;</span><span class="p">))</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;df_regd.pickle&#39;</span><span class="p">)):</span>
-    
-    <span class="c1"># Unit dispatch data</span>
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;df_dis.pickle&#39;</span><span class="p">),</span> <span class="s1">&#39;rb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-        <span class="n">df_dis</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Intermittent generators</span>
+<span class="n">mask_intermittent</span> <span class="o">=</span> <span class="n">df_g</span><span class="p">[</span><span class="s1">&#39;FUEL_CAT&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">isin</span><span class="p">([</span><span class="s1">&#39;Wind&#39;</span><span class="p">,</span> <span class="s1">&#39;Solar&#39;</span><span class="p">])</span>
+<span class="n">df_g</span><span class="p">[</span><span class="n">mask_intermittent</span><span class="p">]</span>
+
+<span class="c1"># Intermittent dispatch at each node</span>
+<span class="n">df_intermittent</span> <span class="o">=</span> <span class="p">(</span><span class="n">df_dispatch</span>
+                   <span class="o">.</span><span class="n">T</span>
+                   <span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">df_g</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask_intermittent</span><span class="p">,</span> <span class="s1">&#39;NODE&#39;</span><span class="p">],</span> <span class="n">how</span><span class="o">=</span><span class="s1">&#39;left&#39;</span><span class="p">)</span>
+                   <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;NODE&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+                   <span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">df_intermittent</span><span class="p">[</span><span class="s1">&#39;level&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;intermittent&#39;</span>
+
+<span class="c1"># Hydro generators</span>
+<span class="n">mask_hydro</span> <span class="o">=</span> <span class="n">df_g</span><span class="p">[</span><span class="s1">&#39;FUEL_CAT&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">isin</span><span class="p">([</span><span class="s1">&#39;Hydro&#39;</span><span class="p">])</span>
+<span class="n">df_g</span><span class="p">[</span><span class="n">mask_hydro</span><span class="p">]</span>
+
+<span class="c1"># Hydro dispatch at each node</span>
+<span class="n">df_hydro</span> <span class="o">=</span> <span class="p">(</span><span class="n">df_dispatch</span>
+            <span class="o">.</span><span class="n">T</span>
+            <span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">df_g</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask_hydro</span><span class="p">,</span> <span class="s1">&#39;NODE&#39;</span><span class="p">],</span> <span class="n">how</span><span class="o">=</span><span class="s1">&#39;left&#39;</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;NODE&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+            <span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">df_hydro</span><span class="p">[</span><span class="s1">&#39;level&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;hydro&#39;</span>
+
+<span class="c1"># Demand at each node</span>
+<span class="k">def</span> <span class="nf">node_demand</span><span class="p">(</span><span class="n">row</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">df_demand</span><span class="p">[</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;NEM_REGION&#39;</span><span class="p">]]</span> <span class="o">*</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;PROP_REG_D&#39;</span><span class="p">]</span>
+<span class="n">df_node_demand</span> <span class="o">=</span> <span class="n">df_n</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">node_demand</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">df_node_demand</span><span class="p">[</span><span class="s1">&#39;level&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;demand&#39;</span>
+
+<span class="c1"># Concatenate intermittent, hydro, and demand series, add level to index</span>
+<span class="n">df_o</span> <span class="o">=</span> <span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">df_node_demand</span><span class="p">,</span> <span class="n">df_intermittent</span><span class="p">,</span> <span class="n">df_hydro</span><span class="p">])</span>
+        <span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">&#39;level&#39;</span><span class="p">,</span> <span class="n">append</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">reorder_levels</span><span class="p">([</span><span class="s1">&#39;level&#39;</span><span class="p">,</span> <span class="s1">&#39;NODE_ID&#39;</span><span class="p">]))</span>
+</pre></div>
+
+</div>
+</div>
+</div>
+
+</div>
+<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
+</div>
+<div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h2 id="K-nearest-neighbours">K-nearest neighbours<a class="anchor-link" href="#K-nearest-neighbours">&#182;</a></h2><p>Construct clustering algorithm to transform the set of trading intervals into a reduced set of representative operating scenarios.</p>
+
+</div>
+</div>
+</div>
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
+<div class="prompt input_prompt">In&nbsp;[6]:</div>
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="k">def</span> <span class="nf">create_scenarios</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_iterations</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">stopping_tolerance</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Create representative demand and fixed power injection operating scenarios</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    df : pandas DataFrame</span>
+<span class="sd">        Input DataFrame from which representative operating conditions </span>
+<span class="sd">        should be constructed</span>
+
+<span class="sd">    k : int</span>
+<span class="sd">        Number of clusters</span>
+
+<span class="sd">    max_iterations : int</span>
+<span class="sd">        Max number of iterations used to find centroid</span>
+
+<span class="sd">    stopping_tolerance : float</span>
+<span class="sd">        Max total difference between successive centroid iteration DataFrames</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    df_clustered : pandas DataFrame</span>
+<span class="sd">        Operating scenario centroids and their associated duration.</span>
+
+<span class="sd">    centroid_history : dict</span>
+<span class="sd">        Dictionary where keys are the iteration number and values are a DataFrame describing</span>
+<span class="sd">        the allocation of operating conditions to centroids, and the distance between these</span>
+<span class="sd">        values. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># Random time periods used to initialise centroids</span>
+    <span class="n">random_periods</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">),</span> <span class="n">k</span><span class="p">)</span>
+    <span class="n">df_centroids</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">random_periods</span><span class="p">]</span>
+
+    <span class="c1"># Rename centroid DataFrame columns and keep track of initial labels</span>
+    <span class="n">timestamp_map</span> <span class="o">=</span> <span class="p">{</span><span class="n">timestamp</span><span class="p">:</span> <span class="n">timestamp_key</span> <span class="o">+</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">timestamp_key</span><span class="p">,</span> <span class="n">timestamp</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">df_centroids</span><span class="o">.</span><span class="n">columns</span><span class="p">)}</span>
+    <span class="n">df_centroids</span> <span class="o">=</span> <span class="n">df_centroids</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="n">timestamp_map</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">compute_distance</span><span class="p">(</span><span class="n">col</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Compute distance between each data associated with each trading interval, col, and all centroids.</span>
+<span class="sd">        Return closest centroid.</span>
+
+<span class="sd">        Params</span>
+<span class="sd">        ------</span>
+<span class="sd">        col : pandas Series</span>
+<span class="sd">            Operating condition for trading interval</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        closest_centroid_ID : pandas Series</span>
+<span class="sd">            Series with ID of closest centroid and the distance to that centroid</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># Initialise minimum distance between data constituting a trading interval and all centroids to an </span>
+        <span class="c1"># arbitrarily large number</span>
+        <span class="n">min_distance</span> <span class="o">=</span> <span class="mf">9e9</span>
         
-    <span class="c1"># Regional demand data</span>
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;df_regd.pickle&#39;</span><span class="p">),</span> <span class="s1">&#39;rb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-        <span class="n">df_regd</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+        <span class="c1"># Initially no centroid is defined as being closest to the given trading interval</span>
+        <span class="n">closest_centroid</span> <span class="o">=</span> <span class="kc">None</span>
 
-<span class="c1"># If either file doesn&#39;t exist, extract data from MMSDM archive</span>
-<span class="k">else</span><span class="p">:</span>        
-    <span class="c1"># Names of individual files that should be extracted from each archived month</span>
-    <span class="n">file_names</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;PUBLIC_DVD_DISPATCH_UNIT_SCADA&#39;</span><span class="p">,</span> <span class="s1">&#39;PUBLIC_DVD_TRADINGREGIONSUM&#39;</span><span class="p">]</span>
+        <span class="c1"># Compute Euclidean (2-norm) distance between the data describing a trading interval, col, and</span>
+        <span class="c1"># all centroids. Identify the closest centroid for the given trading interval.</span>
+        <span class="k">for</span> <span class="n">centroid</span> <span class="ow">in</span> <span class="n">df_centroids</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">distance</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="nb">sum</span><span class="p">((</span><span class="n">df_centroids</span><span class="p">[</span><span class="n">centroid</span><span class="p">]</span> <span class="o">-</span> <span class="n">col</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">))</span>
 
-    <span class="c1"># Lists to hold individual dataframes containing data for each archived month</span>
-    <span class="n">frames_dispatch</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="n">frames_load</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="c1"># If present value less than minimum distance, update minimum distance and record centroid</span>
+            <span class="k">if</span> <span class="n">distance</span> <span class="o">&lt;=</span> <span class="n">min_distance</span><span class="p">:</span>
+                <span class="n">min_distance</span> <span class="o">=</span> <span class="n">distance</span>
+                <span class="n">closest_centroid</span> <span class="o">=</span> <span class="n">centroid</span>
 
-    <span class="c1"># Loop over years</span>
-    <span class="k">for</span> <span class="n">y</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">2017</span><span class="p">]:</span>
-        <span class="c1"># Loop over months (zero padded)</span>
-        <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;</span><span class="si">{0:02d}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">13</span><span class="p">)]:</span>
-            <span class="c1"># Name of monthly archive from which data will be extracted</span>
-            <span class="n">archive_name</span> <span class="o">=</span> <span class="s1">&#39;MMSDM_</span><span class="si">{0}</span><span class="s1">_</span><span class="si">{1}</span><span class="s1">.zip&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">m</span><span class="p">)</span>
+        <span class="c1"># Return ID of closest centroid</span>
+        <span class="n">closest_centroid_ID</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;closest_centroid&#39;</span><span class="p">:</span> <span class="n">closest_centroid</span><span class="p">,</span> <span class="s1">&#39;distance&#39;</span><span class="p">:</span> <span class="n">min_distance</span><span class="p">})</span>
 
-            <span class="c1"># Full path to archive</span>
-            <span class="n">archive_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">archive_dir</span><span class="p">,</span> <span class="n">archive_name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">closest_centroid_ID</span>
 
-            <span class="c1"># For each file type required to be extracted</span>
-            <span class="k">for</span> <span class="n">file_name</span> <span class="ow">in</span> <span class="n">file_names</span><span class="p">:</span>
-                <span class="c1"># Extract data and return dataframe</span>
-                <span class="n">df</span> <span class="o">=</span> <span class="n">ExtractArchiveData</span><span class="o">.</span><span class="n">extract_data</span><span class="p">(</span><span class="n">archive_path</span><span class="p">,</span> <span class="n">file_name</span><span class="p">)</span>
 
-                <span class="c1"># Add dataframe to list of datframes</span>
-                <span class="k">if</span> <span class="n">file_name</span> <span class="ow">is</span> <span class="s1">&#39;PUBLIC_DVD_DISPATCH_UNIT_SCADA&#39;</span><span class="p">:</span>
-                    <span class="n">frames_dispatch</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
-                <span class="k">elif</span> <span class="n">file_name</span> <span class="ow">is</span> <span class="s1">&#39;PUBLIC_DVD_TRADINGREGIONSUM&#39;</span><span class="p">:</span>
-                    <span class="n">frames_load</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">update_centroids</span><span class="p">(</span><span class="n">row</span><span class="p">):</span>
+        <span class="s2">&quot;Update centroids by taking element-wise mean value of all vectors in cluster&quot;</span>
+        
+        <span class="k">return</span> <span class="n">df</span><span class="p">[</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">]]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
-                <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Finished archive: </span><span class="si">{0}</span><span class="s1">, filename: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">archive_path</span><span class="p">,</span> <span class="n">file_name</span><span class="p">))</span>
+    <span class="c1"># History of computed centroids</span>
+    <span class="n">centroid_history</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
 
-    <span class="c1"># Dispatch data for each DUID at 5 min dispatch intervals</span>
-    <span class="n">df_dis</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">frames_dispatch</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_iterations</span><span class="p">):</span>
+        <span class="c1"># Get closest centroids for each trading interval and save result to dictionary</span>
+        <span class="n">df_closest_centroids</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">compute_distance</span><span class="p">)</span>
+        <span class="n">centroid_history</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_closest_centroids</span>
 
-    <span class="c1"># Regional demand (MW) at 30 min trading intervals</span>
-    <span class="n">df_regd</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">frames_load</span><span class="p">)</span>
+        <span class="c1"># Timestamps belonging to each cluster</span>
+        <span class="n">clustered_timestamps</span> <span class="o">=</span> <span class="p">(</span><span class="n">df_closest_centroids</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s1">&#39;closest_centroid&#39;</span><span class="p">]</span>
+                                <span class="o">.</span><span class="n">to_frame</span><span class="p">()</span>
+                                <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+                                <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;closest_centroid&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">x</span><span class="p">)))</span>
+
+        <span class="c1"># Update centroids by computing average nodal values across series in each cluster</span>
+        <span class="n">df_centroids</span> <span class="o">=</span> <span class="n">clustered_timestamps</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">update_centroids</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">T</span>
+
+        <span class="c1"># If first iteration, set total absolute distance to arbitrarily large number</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">total_absolute_distance</span> <span class="o">=</span> <span class="mf">1e7</span>
+
+            <span class="c1"># Lagged DataFrame in next iteration = DataFrame in current iteration</span>
+            <span class="n">df_centroids_lag</span> <span class="o">=</span> <span class="n">df_centroids</span>
+        
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Element-wise absolute difference between current and previous centroid DataFrames</span>
+            <span class="n">df_centroids_update_distance</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">df_centroids</span> <span class="o">-</span> <span class="n">df_centroids_lag</span><span class="p">)</span>
+
+            <span class="c1"># Max total element-wise distance</span>
+            <span class="n">total_absolute_distance</span> <span class="o">=</span> <span class="n">df_centroids_update_distance</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+            <span class="c1"># Stopping condition</span>
+            <span class="k">if</span> <span class="n">total_absolute_distance</span> <span class="o">&lt;=</span> <span class="n">stopping_tolerance</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Iteration number: </span><span class="si">{0}</span><span class="s1"> - Total absolute distance: </span><span class="si">{1}</span><span class="s1">. Stopping criterion satisfied. Exiting loop.&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">total_absolute_distance</span><span class="p">))</span>
+                <span class="k">break</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># Continue loop </span>
+                <span class="n">df_centroids_lag</span> <span class="o">=</span> <span class="n">df_centroids</span>   
+
+        <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Iteration number: </span><span class="si">{0}</span><span class="s1"> - Difference between iterations: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">total_absolute_distance</span><span class="p">))</span>
+        
+        <span class="c1"># Raise warning if loop terminates before stopping condition met</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="p">(</span><span class="n">max_iterations</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Max iteration limit exceeded before stopping tolerance satisfied.&#39;</span><span class="p">)</span>
+
+
+    <span class="c1"># Get duration for each scenario</span>
+    <span class="c1"># ------------------------------</span>
+    <span class="c1"># Length of each trading interval (hours)</span>
+    <span class="n">interval_length</span> <span class="o">=</span> <span class="mf">0.5</span>
+
+    <span class="c1"># Total number of hours for each scenario</span>
+    <span class="n">scenario_hours</span> <span class="o">=</span> <span class="p">(</span><span class="n">clustered_timestamps</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="s1">&#39;SETTLEMENTDATE&#39;</span><span class="p">]),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+                      <span class="o">.</span><span class="n">to_frame</span><span class="p">()</span><span class="o">.</span><span class="n">T</span>
+                      <span class="o">.</span><span class="n">mul</span><span class="p">(</span><span class="n">interval_length</span><span class="p">))</span>
+
+    <span class="c1"># Renaming and setting duration index values</span>
+    <span class="n">scenario_hours</span> <span class="o">=</span> <span class="n">scenario_hours</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s1">&#39;hours&#39;</span><span class="p">})</span>
+    <span class="n">scenario_hours</span><span class="p">[</span><span class="s1">&#39;level&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;duration&#39;</span>
+    <span class="n">scenario_hours</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">&#39;level&#39;</span><span class="p">,</span> <span class="n">append</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># Final DataFrame with clustered values</span>
+    <span class="n">df_clustered</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">df_centroids</span><span class="p">,</span> <span class="n">scenario_hours</span><span class="p">])</span>
+
+    <span class="c1"># Convert column labels to type int</span>
+    <span class="n">df_clustered</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="n">df_clustered</span><span class="o">.</span><span class="n">columns</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df_clustered</span><span class="p">,</span> <span class="n">centroid_history</span>
+</pre></div>
+
+</div>
+</div>
+</div>
+
+</div>
+<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
+</div>
+<div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h2 id="Create-operating-scenarios">Create operating scenarios<a class="anchor-link" href="#Create-operating-scenarios">&#182;</a></h2><p>Create operating scenarios for different numbers of clusters and save to file.</p>
+
+</div>
+</div>
+</div>
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
+<div class="prompt input_prompt">In&nbsp;[7]:</div>
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Create operating scenarios for different numbers of clusters</span>
+<span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">48</span><span class="p">,</span> <span class="mi">100</span><span class="p">]:</span>
+    <span class="c1"># Create operating scenarios</span>
+    <span class="n">df_clustered</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">create_scenarios</span><span class="p">(</span><span class="n">df</span><span class="o">=</span><span class="n">df_o</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="n">k</span><span class="p">,</span> <span class="n">max_iterations</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="mf">9e9</span><span class="p">),</span> <span class="n">stopping_tolerance</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     
-    <span class="c1"># Save data</span>
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;df_dis.pickle&#39;</span><span class="p">),</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-        <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">df_dis</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
-    
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;df_regd.pickle&#39;</span><span class="p">),</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-        <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">df_regd</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
+    <span class="c1"># Save scenarios</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1">_scenarios.pickle&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">k</span><span class="p">)),</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">df_clustered</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
 </pre></div>
 
 </div>
@@ -12063,30 +12267,62 @@ div#notebook {
 
 
 <div class="output_subarea output_stream output_stdout output_text">
-<pre>Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_01.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_01.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_02.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_02.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_03.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_03.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_04.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_04.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_05.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_05.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_06.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_06.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_07.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_07.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_08.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_08.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_09.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_09.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_10.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_10.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_11.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_11.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_12.zip, filename: PUBLIC_DVD_DISPATCH_UNIT_SCADA
-Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_12.zip, filename: PUBLIC_DVD_TRADINGREGIONSUM
+<pre>Iteration number: 1 - Difference between iterations: 10000000.0
+Iteration number: 2 - Difference between iterations: 44872.23773754929
+Iteration number: 3 - Difference between iterations: 28923.76265257388
+Iteration number: 4 - Difference between iterations: 20897.04798111056
+Iteration number: 5 - Difference between iterations: 15480.767642873347
+Iteration number: 6 - Difference between iterations: 12484.768446179873
+Iteration number: 7 - Difference between iterations: 9998.374403476835
+Iteration number: 8 - Difference between iterations: 9016.496824554233
+Iteration number: 9 - Difference between iterations: 8692.182458056617
+Iteration number: 10 - Difference between iterations: 7989.27306254635
+Iteration number: 11 - Difference between iterations: 7771.20160855181
+Iteration number: 12 - Difference between iterations: 7535.567204322281
+Iteration number: 13 - Difference between iterations: 6681.957822619
+Iteration number: 14 - Difference between iterations: 6063.21184936421
+Iteration number: 15 - Difference between iterations: 5215.424862353642
+Iteration number: 16 - Difference between iterations: 5562.561987406691
+Iteration number: 17 - Difference between iterations: 4636.872155246882
+Iteration number: 18 - Difference between iterations: 4151.283815569257
+Iteration number: 19 - Difference between iterations: 3367.486504039685
+Iteration number: 20 - Difference between iterations: 3459.5770540746457
+Iteration number: 21 - Difference between iterations: 3245.760539723998
+Iteration number: 22 - Difference between iterations: 3143.0057158004997
+Iteration number: 23 - Difference between iterations: 2853.8722473869843
+Iteration number: 24 - Difference between iterations: 2948.263029603487
+Iteration number: 25 - Difference between iterations: 3178.291647564428
+Iteration number: 26 - Difference between iterations: 3090.058478165758
+Iteration number: 27 - Difference between iterations: 3132.6272932979864
+Iteration number: 28 - Difference between iterations: 2883.076964496857
+Iteration number: 29 - Difference between iterations: 2795.3964481259122
+Iteration number: 30 - Difference between iterations: 2390.457020044656
+Iteration number: 31 - Difference between iterations: 2221.2255906327273
+Iteration number: 32 - Difference between iterations: 1759.969622790314
+Iteration number: 33 - Difference between iterations: 1770.7633197404978
+Iteration number: 34 - Difference between iterations: 1680.3575206390276
+Iteration number: 35 - Difference between iterations: 1783.2077282971384
+Iteration number: 36 - Difference between iterations: 1491.049419327789
+Iteration number: 37 - Difference between iterations: 1447.7904656385074
+Iteration number: 38 - Difference between iterations: 1256.9267791535688
+Iteration number: 39 - Difference between iterations: 940.6514017071211
+Iteration number: 40 - Difference between iterations: 884.3361346740842
+Iteration number: 41 - Difference between iterations: 852.7413183370817
+Iteration number: 42 - Difference between iterations: 1067.5105096582222
+Iteration number: 43 - Difference between iterations: 1102.0147548261473
+Iteration number: 44 - Difference between iterations: 945.0963234945507
+Iteration number: 45 - Difference between iterations: 970.5755968229757
+Iteration number: 46 - Difference between iterations: 609.280009600923
+Iteration number: 47 - Difference between iterations: 387.9318250670119
+Iteration number: 48 - Difference between iterations: 271.39762944419186
+Iteration number: 49 - Difference between iterations: 216.32451261327768
+Iteration number: 50 - Difference between iterations: 190.70642500194035
+Iteration number: 51 - Difference between iterations: 168.16605745847238
+Iteration number: 52 - Difference between iterations: 78.9477029701386
+Iteration number: 53 - Difference between iterations: 66.12790849852881
+Iteration number: 54 - Difference between iterations: 32.896363159693706
+Iteration number: 55 - Difference between iterations: 38.53012359293304
+Iteration number: 56 - Total absolute distance: 0.0. Stopping criterion satisfied. Exiting loop.
 </pre>
 </div>
 </div>
@@ -12099,2871 +12335,13 @@ Finished archive: D:\nemweb\Reports\Data_Archive\MMSDM\zipped\MMSDM_2017_12.zip,
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Compile-generator-and-network-information">Compile generator and network information<a class="anchor-link" href="#Compile-generator-and-network-information">&#182;</a></h2><h3 id="Reindex-nodes">Reindex nodes<a class="anchor-link" href="#Reindex-nodes">&#182;</a></h3>
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[6]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Original node indices</span>
-<span class="n">df_index_map</span> <span class="o">=</span> <span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">to_frame</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;NODE_ID&#39;</span><span class="p">:</span> <span class="s1">&#39;original&#39;</span><span class="p">})</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="s1">&#39;NODE_ID&#39;</span><span class="p">,</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-
-<span class="c1"># New node indices</span>
-<span class="n">df_index_map</span><span class="p">[</span><span class="s1">&#39;new&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_index_map</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">name</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-
-<span class="c1"># Create dictionary mapping original node indices to new node indices</span>
-<span class="n">index_map</span> <span class="o">=</span> <span class="n">df_index_map</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">&#39;original&#39;</span><span class="p">)[</span><span class="s1">&#39;new&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">to_dict</span><span class="p">()</span>
-
-
-<span class="c1"># Network nodes</span>
-<span class="c1"># -------------</span>
-<span class="c1"># Construct new index and assign to dataframe</span>
-<span class="n">new_index</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">(</span><span class="n">df_n</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">index_map</span><span class="p">[</span><span class="n">x</span><span class="o">.</span><span class="n">name</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">name</span><span class="o">=</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
-<span class="n">df_n</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">new_index</span>
-
-
-<span class="c1"># Network edges</span>
-<span class="c1"># -------------</span>
-<span class="c1"># Reindex &#39;from&#39; and &#39;to&#39; nodes in network edges dataframe</span>
-<span class="k">def</span> <span class="nf">reindex_from_and_to_nodes</span><span class="p">(</span><span class="n">row</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
-    <span class="sd">&quot;&quot;&quot;Re-index &#39;from&#39; and &#39;to&#39; nodes. If required, change node order such that &#39;from&#39; node index &lt; &#39;to&#39; node index&quot;&quot;&quot;</span>
-    
-    <span class="c1"># Original &#39;from&#39; and &#39;to&#39; nodes</span>
-    <span class="n">n_1</span> <span class="o">=</span> <span class="n">index_map</span><span class="p">[</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">]]</span>
-    <span class="n">n_2</span> <span class="o">=</span> <span class="n">index_map</span><span class="p">[</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;TO_NODE&#39;</span><span class="p">]]</span>
-    
-    <span class="k">if</span> <span class="n">order</span><span class="p">:</span>
-        <span class="c1"># If original &#39;from&#39; node index is less than original &#39;to&#39; node index keep same order, else reverse order</span>
-        <span class="k">if</span> <span class="n">n_1</span> <span class="o">&lt;</span> <span class="n">n_2</span><span class="p">:</span>
-            <span class="n">f</span><span class="p">,</span> <span class="n">t</span> <span class="o">=</span> <span class="n">n_1</span><span class="p">,</span> <span class="n">n_2</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">f</span><span class="p">,</span> <span class="n">t</span> <span class="o">=</span> <span class="n">n_2</span><span class="p">,</span> <span class="n">n_1</span>
-        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">({</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">:</span> <span class="n">f</span><span class="p">,</span> <span class="s1">&#39;TO_NODE&#39;</span><span class="p">:</span> <span class="n">t</span><span class="p">})</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">({</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">:</span> <span class="n">n_1</span><span class="p">,</span> <span class="s1">&#39;TO_NODE&#39;</span><span class="p">:</span> <span class="n">n_2</span><span class="p">})</span>
-<span class="n">df_e</span><span class="p">[[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">,</span> <span class="s1">&#39;TO_NODE&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">df_e</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">reindex_from_and_to_nodes</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">(</span><span class="kc">True</span><span class="p">,),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-
-<span class="c1"># Sort lines by &#39;from&#39; and &#39;to&#39; node indices</span>
-<span class="n">df_e</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="n">by</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">,</span> <span class="s1">&#39;TO_NODE&#39;</span><span class="p">],</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-
-<span class="c1"># Generators</span>
-<span class="c1"># ----------</span>
-<span class="n">df_g</span><span class="p">[</span><span class="s1">&#39;NODE&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_g</span><span class="p">[</span><span class="s1">&#39;NODE&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">df_index_map</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">&#39;original&#39;</span><span class="p">)[</span><span class="s1">&#39;new&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">x</span><span class="p">])</span>
-
-
-<span class="c1"># Network HVDC links</span>
-<span class="c1"># ------------------</span>
-<span class="n">df_hvdc</span><span class="p">[[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">,</span> <span class="s1">&#39;TO_NODE&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">df_hvdc</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">reindex_from_and_to_nodes</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-
-
-<span class="c1"># Network interconnectors</span>
-<span class="c1"># -----------------------</span>
-<span class="n">df_ac_i</span><span class="p">[[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">,</span> <span class="s1">&#39;TO_NODE&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">df_ac_i</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">reindex_from_and_to_nodes</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Regional-demand-signals">Regional demand signals<a class="anchor-link" href="#Regional-demand-signals">&#182;</a></h3>
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[7]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Resample to acheive a temporal resolution of 1hr</span>
-<span class="n">df_regd</span> <span class="o">=</span> <span class="n">df_regd</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">&#39;H&#39;</span><span class="p">,</span> <span class="n">closed</span><span class="o">=</span><span class="s1">&#39;right&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;right&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Intermittent-generation-at-each-node">Intermittent generation at each node<a class="anchor-link" href="#Intermittent-generation-at-each-node">&#182;</a></h3>
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[8]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Resample to acheive a temporal resolution of 1hr</span>
-<span class="n">df_dis</span> <span class="o">=</span> <span class="n">df_dis</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s1">&#39;H&#39;</span><span class="p">,</span> <span class="n">closed</span><span class="o">=</span><span class="s1">&#39;right&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;right&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-
-<span class="c1"># Set NaN to 0</span>
-<span class="n">df_dis</span> <span class="o">=</span> <span class="n">df_dis</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-
-<span class="c1"># Set negative generation to zero</span>
-<span class="n">mask</span> <span class="o">=</span> <span class="n">df_dis</span> <span class="o">&lt;</span> <span class="mi">0</span>
-<span class="n">df_dis</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
-
-<span class="c1"># Semi-scheduled DUIDs (e.g. wind and solar)</span>
-<span class="n">ss_duids</span> <span class="o">=</span> <span class="n">df_g</span><span class="p">[</span><span class="n">df_g</span><span class="p">[</span><span class="s1">&#39;SCHEDULE_TYPE&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;SEMI-SCHEDULED&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">index</span>
-
-<span class="c1"># Aggregate dispatch from intermittent generators</span>
-<span class="n">df_inter</span> <span class="o">=</span> <span class="n">df_dis</span><span class="p">[</span><span class="n">ss_duids</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">df_g</span><span class="p">[</span><span class="s1">&#39;NODE&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;NODE&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">T</span>
-
-<span class="c1"># Set negative dispatch to values to 0</span>
-<span class="n">mask</span> <span class="o">=</span> <span class="n">df_inter</span> <span class="o">&lt;</span> <span class="mi">0</span>
-<span class="n">df_inter</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
-
-<span class="c1"># Reindex such that each column represents a network node</span>
-<span class="n">df_inter</span> <span class="o">=</span> <span class="n">df_inter</span><span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Power-injections-from-hydro-plant-at-each-node">Power injections from hydro plant at each node<a class="anchor-link" href="#Power-injections-from-hydro-plant-at-each-node">&#182;</a></h3><p>Can use this dataframe if it is decided to fix hydro output.</p>
-
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[9]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Find all hydro plant</span>
-<span class="n">mask_1</span> <span class="o">=</span> <span class="n">df_g</span><span class="o">.</span><span class="n">FUEL_CAT</span> <span class="o">==</span> <span class="s1">&#39;Hydro&#39;</span>
-<span class="n">mask_2</span> <span class="o">=</span> <span class="n">df_dis</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">df_g</span><span class="p">[</span><span class="n">mask_1</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
-
-<span class="c1"># Aggregate hydro output by the node to which the plant are connected</span>
-<span class="n">df_fx_hydro</span> <span class="o">=</span> <span class="n">df_dis</span><span class="o">.</span><span class="n">T</span><span class="p">[</span><span class="n">mask_2</span><span class="p">]</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">df_g</span><span class="p">[[</span><span class="s1">&#39;NODE&#39;</span><span class="p">]])</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;NODE&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">T</span>
-
-<span class="c1"># Reindex columns with node IDs</span>
-<span class="n">df_fx_hydro</span> <span class="o">=</span> <span class="n">df_fx_hydro</span><span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">labels</span><span class="o">=</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="s1">&#39;columns&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="HVDC-incidence-matrix">HVDC incidence matrix<a class="anchor-link" href="#HVDC-incidence-matrix">&#182;</a></h3>
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[10]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Incidence matrix for HVDC links</span>
-<span class="n">df_hvdc_c</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="n">df_hvdc</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-
-<span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">df_hvdc</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
-    <span class="c1"># From nodes assigned a value of 1 in the incidence matrix</span>
-    <span class="n">df_hvdc_c</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">index</span><span class="p">,</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="mi">1</span>
-    
-    <span class="c1"># To nodes assigned a value of -1 in the incidence matrix</span>
-    <span class="n">df_hvdc_c</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">index</span><span class="p">,</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;TO_NODE&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
-<span class="n">df_hvdc_c</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-
-<div class="output_area">
-
-<div class="prompt output_prompt">Out[10]:</div>
-
-
-
-<div class="output_html rendered_html output_subarea output_execute_result">
-<div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>NODE_ID</th>
-      <th>1</th>
-      <th>2</th>
-      <th>3</th>
-      <th>4</th>
-      <th>5</th>
-      <th>6</th>
-      <th>7</th>
-      <th>8</th>
-      <th>9</th>
-      <th>10</th>
-      <th>...</th>
-      <th>903</th>
-      <th>904</th>
-      <th>905</th>
-      <th>906</th>
-      <th>907</th>
-      <th>908</th>
-      <th>909</th>
-      <th>910</th>
-      <th>911</th>
-      <th>912</th>
-    </tr>
-    <tr>
-      <th>HVDC_LINK_ID</th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>DIRECTLINK</th>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>...</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-    </tr>
-    <tr>
-      <th>T-V-MNSP1</th>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>...</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-    </tr>
-    <tr>
-      <th>V-S-MNSP1</th>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>...</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-      <td>0</td>
-    </tr>
-  </tbody>
-</table>
-<p>3 rows × 912 columns</p>
-</div>
-</div>
-
-</div>
-
-</div>
-</div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Construct-network-admittance-matrix">Construct network admittance matrix<a class="anchor-link" href="#Construct-network-admittance-matrix">&#182;</a></h3>
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[11]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Initialise dataframe</span>
-<span class="n">df_Y</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="mi">0</span><span class="n">j</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
-
-<span class="c1"># Off-diagonal elements</span>
-<span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">df_e</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
-    <span class="n">fn</span><span class="p">,</span> <span class="n">tn</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">],</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;TO_NODE&#39;</span><span class="p">]</span>
-    <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">fn</span><span class="p">,</span> <span class="n">tn</span><span class="p">]</span> <span class="o">+=</span> <span class="o">-</span> <span class="p">(</span><span class="mi">1</span> <span class="o">/</span> <span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;R_PU&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="n">j</span> <span class="o">*</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;X_PU&#39;</span><span class="p">]))</span> <span class="o">*</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;NUM_LINES&#39;</span><span class="p">]</span>
-    <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">tn</span><span class="p">,</span> <span class="n">fn</span><span class="p">]</span> <span class="o">+=</span> <span class="o">-</span> <span class="p">(</span><span class="mi">1</span> <span class="o">/</span> <span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;R_PU&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="n">j</span> <span class="o">*</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;X_PU&#39;</span><span class="p">]))</span> <span class="o">*</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;NUM_LINES&#39;</span><span class="p">]</span>
-
-<span class="c1"># Diagonal elements</span>
-<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">df_n</span><span class="o">.</span><span class="n">index</span><span class="p">:</span>
-    <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span> <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="p">:]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
-
-<span class="c1"># Add shunt susceptance to diagonal elements</span>
-<span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">df_e</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
-    <span class="n">fn</span><span class="p">,</span> <span class="n">tn</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;FROM_NODE&#39;</span><span class="p">],</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;TO_NODE&#39;</span><span class="p">]</span>
-    <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">fn</span><span class="p">,</span> <span class="n">fn</span><span class="p">]</span> <span class="o">+=</span> <span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;B_PU&#39;</span><span class="p">]</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;NUM_LINES&#39;</span><span class="p">]</span>
-    <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">tn</span><span class="p">,</span> <span class="n">tn</span><span class="p">]</span> <span class="o">+=</span> <span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;B_PU&#39;</span><span class="p">]</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="n">row</span><span class="p">[</span><span class="s1">&#39;NUM_LINES&#39;</span><span class="p">]</span>
-
-<span class="c1"># Remove admittances for HVDC links</span>
-<span class="n">hvdc_links</span> <span class="o">=</span> <span class="p">[(</span><span class="n">df_hvdc_c</span><span class="o">.</span><span class="n">columns</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">df_hvdc_c</span><span class="o">.</span><span class="n">columns</span><span class="p">[</span><span class="n">j</span><span class="p">])</span>  <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="n">df_hvdc_c</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="n">df_hvdc_c</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)[</span><span class="mi">1</span><span class="p">])]</span>
-<span class="k">for</span> <span class="n">link</span> <span class="ow">in</span> <span class="n">hvdc_links</span><span class="p">:</span>
-    <span class="n">from_node</span><span class="p">,</span> <span class="n">to_node</span> <span class="o">=</span> <span class="n">link</span>
-    <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">from_node</span><span class="p">,</span> <span class="n">to_node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
-    <span class="n">df_Y</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">to_node</span><span class="p">,</span> <span class="n">from_node</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
-
-<span class="c1"># Final admittance matrix</span>
-<span class="n">df_Y</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-
-<div class="output_area">
-
-<div class="prompt output_prompt">Out[11]:</div>
-
-
-
-<div class="output_html rendered_html output_subarea output_execute_result">
-<div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>NODE_ID</th>
-      <th>1</th>
-      <th>2</th>
-      <th>3</th>
-      <th>4</th>
-      <th>5</th>
-      <th>6</th>
-      <th>7</th>
-      <th>8</th>
-      <th>9</th>
-      <th>10</th>
-      <th>...</th>
-      <th>903</th>
-      <th>904</th>
-      <th>905</th>
-      <th>906</th>
-      <th>907</th>
-      <th>908</th>
-      <th>909</th>
-      <th>910</th>
-      <th>911</th>
-      <th>912</th>
-    </tr>
-    <tr>
-      <th>NODE_ID</th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>1</th>
-      <td>(36.39921470471864-75.48535472468413j)</td>
-      <td>(-21.87535555119707+45.636348547438196j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>(-21.87535555119707+45.636348547438196j)</td>
-      <td>(21.877773521053353-45.636348547438196j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>3</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(98.75914664395702-201.02064032301197j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>4</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(37.96340259979073-79.12644501666418j)</td>
-      <td>(-16.732869997874463+34.90809946539054j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>5</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(-16.732869997874463+34.90809946539054j)</td>
-      <td>(61.3128035752467-136.47508314898272j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>6</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(63.0967147169299-131.57736575614297j)</td>
-      <td>0j</td>
-      <td>(-54.520464585760976+113.74054784987909j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>7</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(199.66795643502874-406.41682137200235j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>8</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(-54.520464585760976+113.74054784987909j)</td>
-      <td>0j</td>
-      <td>(54.521434752664724-113.74054784987909j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>9</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(3189.61938302652-7336.203309298312j)</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>10</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(19.877141329877862-41.4454414470885j)</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>11</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>12</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>13</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(-9.662894810041042+20.15872311177741j)</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>14</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>15</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>16</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>17</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>18</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>19</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>20</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>21</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>22</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>23</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(-98.75804470666624+201.02064032301197j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>24</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>25</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>26</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>27</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>28</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>29</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>30</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>...</th>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-    </tr>
-    <tr>
-      <th>883</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>884</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>885</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>886</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>887</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>888</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>889</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>890</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>891</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>892</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>893</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>894</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>895</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>896</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>897</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>898</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>899</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>900</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>901</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>902</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>903</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>(81.476261781478-169.9702915736654j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>904</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>(2097.320866448707-4375.428993696623j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>905</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(148.6101162361399-310.0195502574294j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>906</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(16.3974197896742-33.99934676666036j)</td>
-      <td>0j</td>
-      <td>(-8.993308912901778+18.761833570358075j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>907</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(6.7021553283309725-13.818960768706894j)</td>
-      <td>(-2.9250070768676495+6.102147329731091j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>908</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(-8.993308912901778+18.761833570358075j)</td>
-      <td>(-2.9250070768676495+6.102147329731091j)</td>
-      <td>(11.959925260636522-24.863980900089167j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>909</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(3003.2854236983094-6265.439273938512j)</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>910</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(114.99647467107498-239.89489430021786j)</td>
-      <td>0j</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>911</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(6.907791481176555-14.395036766870746j)</td>
-      <td>0j</td>
-    </tr>
-    <tr>
-      <th>912</th>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>...</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>0j</td>
-      <td>(1000.5041000668625-2036.5088002135321j)</td>
-    </tr>
-  </tbody>
-</table>
-<p>912 rows × 912 columns</p>
-</div>
-</div>
-
-</div>
-
-</div>
-</div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Reference-nodes">Reference nodes<a class="anchor-link" href="#Reference-nodes">&#182;</a></h3>
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[12]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Mainland reference node = Victoria&#39;s Regional Reference Node</span>
-<span class="k">def</span> <span class="nf">get_rrn</span><span class="p">(</span><span class="n">nem_region_id</span><span class="p">):</span>
-    <span class="sd">&quot;&quot;&quot;Return the Regional Reference Node (RRN) ID for a given NEM region&quot;&quot;&quot;</span>
-    
-    <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">df_n</span><span class="p">[</span><span class="s1">&#39;NEM_REGION&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">nem_region_id</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df_n</span><span class="p">[</span><span class="s1">&#39;RRN&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">df_n</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-
-<span class="c1"># Mainland (zone 1) and Tasmanian (zone 2) reference node IDs</span>
-<span class="n">zones</span> <span class="o">=</span> <span class="p">{</span><span class="mi">1</span><span class="p">:</span> <span class="n">get_rrn</span><span class="p">(</span><span class="s1">&#39;VIC1&#39;</span><span class="p">),</span> <span class="mi">2</span><span class="p">:</span> <span class="n">get_rrn</span><span class="p">(</span><span class="s1">&#39;TAS1&#39;</span><span class="p">)}</span>
-<span class="n">zones</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-
-<div class="output_area">
-
-<div class="prompt output_prompt">Out[12]:</div>
-
-
+<h2 id="References">References<a class="anchor-link" href="#References">&#182;</a></h2><p>[1] - Australian Energy Markets Operator. Data Archive (2018). at <a href="http://www.nemweb.com.au/#mms-data-model:download">http://www.nemweb.com.au/#mms-data-model:download</a></p>
+<p>[2] - Baringo L., Conejo, A. J., Correlated wind-power production and electric load scenarios for investment decisions. Applied Energy (2013).</p>
+<p>[3] - Xenophon A. K., Hill D. J., Geospatial modelling of Australia's National Electricity Market allowing backtesting against historic data.  Scientific Data (2018).</p>
+<p>[4] - Xenophon A. K., Hill D. J., Geospatial Modelling of Australia's National Electricity Market - Dataset (Version v1.3) [Data set]. Zenodo. <a href="http://doi.org/10.5281/zenodo.1326942">http://doi.org/10.5281/zenodo.1326942</a></p>
 
-
-<div class="output_text output_subarea output_execute_result">
-<pre>{1: 187, 2: 676}</pre>
-</div>
-
-</div>
-
-</div>
-</div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Summary-of-data-at-each-node">Summary of data at each node<a class="anchor-link" href="#Summary-of-data-at-each-node">&#182;</a></h3>
-</div>
-</div>
-</div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[13]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># DataFrame that will contain a summary of data used in the DCOPF model</span>
-<span class="n">df_m</span> <span class="o">=</span> <span class="n">df_n</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-
-<span class="c1"># DUIDs assigned to each node</span>
-<span class="n">df_m</span><span class="p">[</span><span class="s1">&#39;DUID&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_g</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;NODE&#39;</span><span class="p">)[[</span><span class="s1">&#39;DUID&#39;</span><span class="p">]]</span><span class="o">.</span><span class="n">aggregate</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">set</span><span class="p">(</span><span class="n">x</span><span class="p">))</span><span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">df_m</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="nb">set</span><span class="p">())</span>
-<span class="n">df_m</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-
-<div class="output_area">
-
-<div class="prompt output_prompt">Out[13]:</div>
-
-
-
-<div class="output_html rendered_html output_subarea output_execute_result">
-<div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>STATE_NAME</th>
-      <th>NEM_REGION</th>
-      <th>NEM_ZONE</th>
-      <th>VOLTAGE_KV</th>
-      <th>RRN</th>
-      <th>PROP_REG_D</th>
-      <th>LATITUDE</th>
-      <th>LONGITUDE</th>
-      <th>DUID</th>
-    </tr>
-    <tr>
-      <th>NODE_ID</th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>1</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SEQ</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.007512</td>
-      <td>-24.917141</td>
-      <td>152.299799</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SEQ</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.009360</td>
-      <td>-24.939046</td>
-      <td>152.366053</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>3</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.065747</td>
-      <td>-42.873262</td>
-      <td>147.321013</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>4</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>SWNSW</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.000723</td>
-      <td>-35.994150</td>
-      <td>146.984691</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>5</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>SWNSW</td>
-      <td>330</td>
-      <td>0</td>
-      <td>0.000720</td>
-      <td>-35.925346</td>
-      <td>146.908546</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>6</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>SWNSW</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.000639</td>
-      <td>-35.940867</td>
-      <td>146.396861</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>7</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SEQ</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.004972</td>
-      <td>-28.026002</td>
-      <td>153.429752</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>8</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>SWNSW</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.001504</td>
-      <td>-35.971458</td>
-      <td>146.390376</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>9</th>
-      <td>South Australia</td>
-      <td>SA1</td>
-      <td>NSA</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.000257</td>
-      <td>-33.348652</td>
-      <td>138.751659</td>
-      <td>{BLUFF1, AGLHAL}</td>
-    </tr>
-    <tr>
-      <th>10</th>
-      <td>South Australia</td>
-      <td>SA1</td>
-      <td>ADE</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.013302</td>
-      <td>-35.079285</td>
-      <td>138.852368</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>11</th>
-      <td>South Australia</td>
-      <td>SA1</td>
-      <td>ADE</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.097755</td>
-      <td>-35.113283</td>
-      <td>138.549843</td>
-      <td>{PTSTAN1, LONSDALE}</td>
-    </tr>
-    <tr>
-      <th>12</th>
-      <td>South Australia</td>
-      <td>SA1</td>
-      <td>ADE</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.067991</td>
-      <td>-35.051980</td>
-      <td>138.576727</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>13</th>
-      <td>South Australia</td>
-      <td>SA1</td>
-      <td>ADE</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.019753</td>
-      <td>-35.094976</td>
-      <td>138.645882</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>14</th>
-      <td>South Australia</td>
-      <td>SA1</td>
-      <td>ADE</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.013945</td>
-      <td>-35.084750</td>
-      <td>138.848607</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>15</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>CAN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.001228</td>
-      <td>-36.218199</td>
-      <td>149.140275</td>
-      <td>{BOCORWF1}</td>
-    </tr>
-    <tr>
-      <th>16</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>CAN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.004656</td>
-      <td>-36.715825</td>
-      <td>149.841127</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>17</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.010574</td>
-      <td>-42.859937</td>
-      <td>147.407702</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>18</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.001129</td>
-      <td>-42.780562</td>
-      <td>147.078627</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>19</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>220</td>
-      <td>0</td>
-      <td>0.025202</td>
-      <td>-42.824884</td>
-      <td>147.349387</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>20</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.011827</td>
-      <td>-42.745085</td>
-      <td>147.454073</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>21</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>220</td>
-      <td>0</td>
-      <td>0.046031</td>
-      <td>-42.843081</td>
-      <td>147.254960</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>22</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.006536</td>
-      <td>-42.779945</td>
-      <td>147.076664</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>23</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.015935</td>
-      <td>-42.859474</td>
-      <td>147.291752</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>24</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.038507</td>
-      <td>-42.731517</td>
-      <td>147.231254</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>25</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.028429</td>
-      <td>-42.776240</td>
-      <td>147.555392</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>26</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.010925</td>
-      <td>-42.973097</td>
-      <td>147.267754</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>27</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>SWNSW</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.000527</td>
-      <td>-34.489418</td>
-      <td>144.878289</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>28</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SWQ</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.007578</td>
-      <td>-27.556354</td>
-      <td>151.899565</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>29</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SWQ</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.000052</td>
-      <td>-27.419605</td>
-      <td>151.679508</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>30</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>330</td>
-      <td>0</td>
-      <td>0.011794</td>
-      <td>-34.014342</td>
-      <td>150.851327</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>...</th>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-      <td>...</td>
-    </tr>
-    <tr>
-      <th>883</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.000361</td>
-      <td>-24.334319</td>
-      <td>150.628405</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>884</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.000441</td>
-      <td>-24.386390</td>
-      <td>150.502034</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>885</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.000238</td>
-      <td>-24.342603</td>
-      <td>150.627457</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>886</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.000006</td>
-      <td>-24.344880</td>
-      <td>150.619749</td>
-      <td>{CALL_B_1, CALL_B_2}</td>
-    </tr>
-    <tr>
-      <th>887</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.000787</td>
-      <td>-24.513843</td>
-      <td>150.065440</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>888</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>275</td>
-      <td>0</td>
-      <td>0.000007</td>
-      <td>-24.344946</td>
-      <td>150.618181</td>
-      <td>{CPP_4, CPP_3}</td>
-    </tr>
-    <tr>
-      <th>889</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.001296</td>
-      <td>-24.401587</td>
-      <td>150.508116</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>890</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>330</td>
-      <td>0</td>
-      <td>0.001458</td>
-      <td>-33.211691</td>
-      <td>151.541837</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>891</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.000027</td>
-      <td>-42.301208</td>
-      <td>146.457156</td>
-      <td>{TARRALEA}</td>
-    </tr>
-    <tr>
-      <th>892</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.004398</td>
-      <td>-33.891629</td>
-      <td>151.260500</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>893</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>220</td>
-      <td>0</td>
-      <td>0.001003</td>
-      <td>-42.154835</td>
-      <td>145.534477</td>
-      <td>{JBUTTERS}</td>
-    </tr>
-    <tr>
-      <th>894</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.001140</td>
-      <td>-42.066135</td>
-      <td>145.560220</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>895</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>220</td>
-      <td>0</td>
-      <td>0.000009</td>
-      <td>-42.740497</td>
-      <td>145.982000</td>
-      <td>{GORDON}</td>
-    </tr>
-    <tr>
-      <th>896</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SWQ</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.000541</td>
-      <td>-27.429564</td>
-      <td>151.707098</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>897</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SWQ</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.000177</td>
-      <td>-27.698153</td>
-      <td>151.663803</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>898</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.003668</td>
-      <td>-32.712119</td>
-      <td>151.327661</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>899</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>220</td>
-      <td>0</td>
-      <td>0.008880</td>
-      <td>-41.076771</td>
-      <td>145.891202</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>900</th>
-      <td>Tasmania</td>
-      <td>TAS1</td>
-      <td>TAS</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.005661</td>
-      <td>-41.269812</td>
-      <td>145.727427</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>901</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.010082</td>
-      <td>-32.940258</td>
-      <td>151.626688</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>902</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.004456</td>
-      <td>-32.887815</td>
-      <td>151.652273</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>903</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.001751</td>
-      <td>-32.885165</td>
-      <td>151.741983</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>904</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.000463</td>
-      <td>-32.580206</td>
-      <td>151.071936</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>905</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.005752</td>
-      <td>-33.830016</td>
-      <td>151.008894</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>906</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NNS</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.002885</td>
-      <td>-31.098198</td>
-      <td>152.819301</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>907</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.009607</td>
-      <td>-31.899287</td>
-      <td>152.451600</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>908</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.008975</td>
-      <td>-31.449823</td>
-      <td>152.835446</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>909</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.001079</td>
-      <td>-33.841766</td>
-      <td>150.912262</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>910</th>
-      <td>New South Wales</td>
-      <td>NSW1</td>
-      <td>NCEN</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.006344</td>
-      <td>-33.735388</td>
-      <td>150.885936</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>911</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>CQ</td>
-      <td>132</td>
-      <td>0</td>
-      <td>0.001492</td>
-      <td>-24.389554</td>
-      <td>148.435928</td>
-      <td>{}</td>
-    </tr>
-    <tr>
-      <th>912</th>
-      <td>Queensland</td>
-      <td>QLD1</td>
-      <td>SEQ</td>
-      <td>110</td>
-      <td>0</td>
-      <td>0.001489</td>
-      <td>-27.469999</td>
-      <td>153.027997</td>
-      <td>{}</td>
-    </tr>
-  </tbody>
-</table>
-<p>912 rows × 9 columns</p>
-</div>
-</div>
-
-</div>
-
-</div>
 </div>
-
-</div>
-<div class="cell border-box-sizing text_cell rendered"><div class="prompt input_prompt">
-</div>
-<div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Model-data-summary">Model data summary<a class="anchor-link" href="#Model-data-summary">&#182;</a></h3><p>Store data in dictionary and pickle. Will use this when constructing model.</p>
-
-</div>
-</div>
 </div>
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-<div class="prompt input_prompt">In&nbsp;[14]:</div>
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># Place model data in dictionary</span>
-<span class="n">model_data</span> <span class="o">=</span> <span class="p">{}</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_g&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_g</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_Y&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_Y</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_m</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_hvdc_c&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_hvdc_c</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;zones&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">zones</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_ac_i&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_ac_i</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_ac_i_lim&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_ac_i_lim</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_hvdc&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_hvdc</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_regd&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_regd</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_inter&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_inter</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_dis&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_dis</span>
-<span class="n">model_data</span><span class="p">[</span><span class="s1">&#39;df_fx_hydro&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_fx_hydro</span>
-
-<span class="c1"># Pickle model data</span>
-<span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s1">&#39;model_data.pickle&#39;</span><span class="p">),</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-    <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">model_data</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
-</pre></div>
-
-</div>
-</div>
-</div>
-
 </div>
     </div>
   </div>
