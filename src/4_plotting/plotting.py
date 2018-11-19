@@ -278,7 +278,7 @@ def plot_merit_order():
     cbar1.set_label('Emissions intensity (tCO${_2}$/MWh)', fontsize=8, fontname='Helvetica')
 
     cbar2 = fig1.colorbar(patches_net_liability, ax=ax2, pad=0.015, aspect=30)
-    cbar2.set_label('Net liability ($/MWh)', fontsize=8, fontname='Helvetica')
+    cbar2.set_label('Net liability (\$/MWh)', fontsize=8, fontname='Helvetica')
 
     # Label axes
     ax1.set_ylabel('Permit price (\$/tCO$_{2}$)', fontsize=9, fontname='Helvetica')
