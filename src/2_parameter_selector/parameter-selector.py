@@ -1,8 +1,8 @@
 
 # coding: utf-8
 
-# # Emissions Intensity Scheme (EIS) Parameter Selection
-# This notebook describes a mathematical framework for selecting EIS parameters. Please be aware of the following key assumptions underlying this model:
+# # Parameter Calibration
+# This notebook describes a mathematical framework for selecting policy parameters - namely the emissions intensity baseline and permit price. Please be aware of the following key assumptions underlying this model:
 # 
 # * Generators bid into the market at their short-run marginal cost (SRMC);
 # * the market for electricity is perfectly competitive;
@@ -12,12 +12,12 @@
 # 1. Import packages and declare declare paths to files
 # 2. Load data
 # 3. Organise data
-# 6. Construct model used to select EIS parameters. The model consists of three blocks of equations:
+# 6. Construct model used to select scheme parameters. The model consists of three blocks of equations:
 #  * Primal block - contains constraints related to a standard DCOPF model;
-#  * Dual block - dual constraints associated with a standard DCOPF model;
+#  * Dual block - dual constraints associated with dual program of standard DCOPF model;
 #  * Strong duality constraint block - block of constraints linking primal and dual objectives.
 # 7. Run DCOPF model to find business-as-usual emissions and wholesale prices.
-# 8. Run model used to select EIS parameters, save output
+# 8. Run model used to select policy parameters, save output
 # 
 # ## Import packages
 
@@ -48,13 +48,16 @@ np.random.seed(seed=10)
 # In[2]:
 
 
+# Identifier used to update paths depending on the number of scenarios investigated
+number_of_scenarios = '100_scenarios'
+
 class DirectoryPaths(object):
     "Paths to relevant directories"
     
     def __init__(self):
         self.data_dir = os.path.join(os.path.curdir, os.path.pardir, os.path.pardir, 'data')
         self.scenarios_dir = os.path.join(os.path.curdir, os.path.pardir, '1_create_scenarios')
-        self.output_dir = os.path.join(os.path.curdir, 'output', '48_scenarios')
+        self.output_dir = os.path.join(os.path.curdir, 'output', number_of_scenarios)
 
 paths = DirectoryPaths()
 
@@ -101,7 +104,7 @@ class RawData(object):
                
         # Operating scenarios
         # -------------------
-        with open(os.path.join(paths.scenarios_dir, 'output', '48_scenarios.pickle'), 'rb') as f:
+        with open(os.path.join(paths.scenarios_dir, 'output', '{0}.pickle'.format(number_of_scenarios)), 'rb') as f:
             self.df_scenarios = pickle.load(f)
 
 # Create object containing raw model data
@@ -985,7 +988,7 @@ def run_model(model_type=None, mode=None, tau_list=None, phi_list=None, E_list=N
 # ### DCOPF Results
 # Standard DCOPF model used to verify that MPPDC has been formulated correctly.
 
-# In[8]:
+# In[ ]:
 
 
 # Loop through permit prices
@@ -1007,7 +1010,7 @@ for permit_price in [0]:
 # #### Fixed permit price and baseline
 # Fix permit price and baseline. Results should be the same for the DCOPF base-case.
 
-# In[9]:
+# In[ ]:
 
 
 # Not required, but could potentially impact way in which solver performs, hence the reason for recording this value
@@ -1018,7 +1021,6 @@ phi_list = [0]
 
 # Permit prices
 tau_list = list(range(0, 71, 2))
-tau_list = [0, 10]
 
 # Run model
 run_model(model_type='MPPDC', 
@@ -1031,7 +1033,7 @@ run_model(model_type='MPPDC',
 # #### Compute baseline given fixed permit price
 # Calculate emissions intensity baseline that achieves a given average wholesale price target for a given permit price. Set the base-case wholesale price target to be the business-as-usual (BAU) price.
 
-# In[10]:
+# In[8]:
 
 
 with open(os.path.join(paths.output_dir, 'MPPDC-FIXED_PARAMETERS-BASELINE_0-PERMIT_PRICE_0.pickle'), 'rb') as f:
@@ -1044,16 +1046,14 @@ print('Average price = {0}'.format(bau_average_price))
 
 # Define parameters for policy scenarios.
 
-# In[11]:
+# In[9]:
 
 
 # Target average wholesale prices as a multiple of the BAU price
 target_bau_average_price_multiple_list = [0.8, 0.9, 1, 1.1, 1.2]
-target_bau_average_price_multiple_list = [1.2]
 
 # Permit prices
 tau_list = list(range(2, 71, 2))
-tau_list = [10]
 
 # Run model
 run_model(model_type='MPPDC',
@@ -1067,7 +1067,7 @@ run_model(model_type='MPPDC',
 
 # ### Find permit price and baseline given emissions and revenue constraints
 
-# In[12]:
+# In[10]:
 
 
 # Scheme revenue constraint (net scheme revenue must be greater than or equal to min_scheme_revenue)

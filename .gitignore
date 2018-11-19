@@ -10,7 +10,7 @@ man/Applied_Energy/*
 man/Applied_Energy/3_revised_submission_1/*
 !man/Applied_Energy/3_revised_submission_1/derivation/
 man/Applied_Energy/3_revised_submission_1/derivation/*
-!man/Applied_Energy/3_revised_submission_1/derivation/mppdc_derivation.pdf
+!man/Applied_Energy/3_revised_submission_1/derivation/mppdc-derivation.pdf
 
 src/2_parameter_selector/output/*
 !src/2_parameter_selector/output/README.md

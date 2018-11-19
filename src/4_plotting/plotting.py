@@ -15,6 +15,8 @@
 # 4. Average emissions intensity as a function of permit price
 # 
 # 5. Average regional prices under a BAU average wholesale price targeting REP scheme (subplot a), and a carbon tax (subplot b) for different permit prices.
+# 
+# ## Import packages
 
 # In[1]:
 
@@ -124,6 +126,7 @@ mmi = 0.0393701
 
 
 # ### Merit order plots
+# Represent generators as rectangles. The length of a rectangle corresponds to a generator's capacity relative total installed capacity. Arrange these rectangles (generators) in order of increasing short-run marginal cost (SRMC), creating a merit order of generation. The colour and shade of each rectangle can be used to denote different generator properties e.g. emissions intensity, SRMC, or net liability faced under an output-based rebating scheme. Repeat this procedure for different permit price scenarios. Note that different permit prices will change the relative costs of generators, shifting their position in the merit order.
 
 # In[6]:
 
@@ -377,6 +380,7 @@ plot_merit_order()
 
 
 # ### Price targeting baselines and corresponding scheme revenue
+# Plot emissions intensity baselines, scheme revenue, and average wholesale price outcomes for each permit price and wholesale price targeting scenario.
 
 # In[7]:
 
@@ -518,6 +522,7 @@ plot_bau_price_target_and_baseline()
 
 
 # ### System emissions intensity as a function of permit price
+# Plot system emissions intensity as a function of permit price.
 
 # In[9]:
 
@@ -556,6 +561,7 @@ plot_permit_price_vs_emissions_intensity()
 
 
 # ### Regional prices under REP scheme and carbon tax
+# Show regional impacts of the policy and compare with a carbon tax where rebates are not give to generators.
 
 # In[10]:
 
