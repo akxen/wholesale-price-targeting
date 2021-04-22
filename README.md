@@ -1,5 +1,7 @@
 # Emissions reduction and wholesale electricity price targeting using an output-based mechanism
-This repository contains a series of Jupyter Notebooks which implement a mathematical program used to calibrate an output-based emissions abatement policy. Specifically, the program determines values for permit prices and the sectoral emissions intensity baseline that yields given environmental and economic objectives. A derivation of the mathematical program is given in `mppdc-derivation.pdf` within the `derviation` folder.
+This repository complements the following publication: Xenophon, A.K., & Hill, D.J. (2019). Emissions reduction and wholesale electricity price targeting using an output-based mechanism. Applied energy, 242, 1050-1063. [https://doi.org/10.1016/j.apenergy.2019.03.083](https://doi.org/10.1016/j.apenergy.2019.03.083)
+
+Jupyter Notebooks within this repository implement a mathematical program used to calibrate an output-based emissions abatement policy. Specifically, the program determines values for permit prices and the sectoral emissions intensity baseline that yields given environmental and economic objectives. A derivation of the mathematical program is given in `mppdc-derivation.pdf` within the `derviation` folder.
 
 A summary of each Jupyter Notebook is as follows:
 
